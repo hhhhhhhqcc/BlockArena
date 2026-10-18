@@ -1,0 +1,174 @@
+using System;
+using System.Collections;
+using System.IO;
+using BlockArena.Core;
+using BlockArena.Presentation;
+using UnityEngine;
+
+namespace BlockArena.Runtime
+{
+    // Opt-in smoke driver for the built native player; it is inactive in ordinary play.
+    public sealed class ArenaSmokeProbe : MonoBehaviour
+    {
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        static void StartIfRequested()
+        {
+            string[] args=Environment.GetCommandLineArgs();
+            if(Array.IndexOf(args,"-smoke-test")>=0)
+                new GameObject("Native player verification").AddComponent<ArenaSmokeProbe>();
+        }
+        IEnumerator Start()
+        {
+            string[] args=Environment.GetCommandLineArgs();
+            string folder=Path.Combine(Application.dataPath,"..","Captures");
+            for(int i=0;i+1<args.Length;i++)if(args[i]=="-capture-dir")folder=args[i+1];
+            Directory.CreateDirectory(folder);
+            var app=ArenaApp.Instance;
+            app.VerificationInput=true;
+            yield return new WaitForSecondsRealtime(1.5f);
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"01-menu.png"));
+            yield return new WaitForSecondsRealtime(.5f);
+            app.Host(true);
+            float deadline=Time.realtimeSinceStartup+18;
+            while((app.State==null||app.State.phase!="recruit")&&Time.realtimeSinceStartup<deadline)yield return null;
+            if(app.State==null||app.State.phase!="recruit"){Fail("recruit handshake failed: "+app.Status);yield break;}
+            yield return new WaitForSecondsRealtime(1.2f);
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"02-recruit.png"));
+            yield return new WaitForSecondsRealtime(.5f);
+            int choice=-1,price=999;
+            for(int i=0;i<app.Me.shop.Length;i++)if(CreatureCatalog.Get(app.Me.shop[i]).price<price){choice=i;price=CreatureCatalog.Get(app.Me.shop[i]).price;}
+            // Reserve enough gold to exercise a real equipment purchase as well.
+            bool recruit=price<=6;int originalGold=app.Me.gold;
+            app.Send(recruit?new GameCommand{type="choose",index=choice}:new GameCommand{type="skip"});
+            yield return new WaitForSecondsRealtime(1.5f);
+            if(app.Me==null||app.Me.recruitPending||app.Me.units.Count!=(recruit?3:2)||app.Me.gold!=originalGold-(recruit?price:0)){Fail("paid recruit / skip accounting failed");yield break;}
+            var unit=app.Me.units[0];
+            VoxelCreature placed=null;
+            foreach(var candidate in app.World.GetComponentsInChildren<VoxelCreature>())if(candidate.UnitId==unit.id){placed=candidate;break;}
+            if(placed==null){Fail("preparation creature not rendered");yield break;}
+            Camera camera=app.World.ViewCamera;
+            Vector3 original=placed.transform.position;
+            Vector2 grab=camera.WorldToScreenPoint(original+Vector3.up*(placed.Height*placed.Size*.5f));
+            app.ProcessPlacementPointer(grab,true,true,false);
+            yield return new WaitForSecondsRealtime(.12f);
+            if(app.SelectedId!=unit.id||Vector3.Distance(original,placed.transform.position)>.03f){Fail("stationary grab changed creature position");yield break;}
+            Point2 position=ArenaGame.LocalToWorld(app.Me.slot,70,230);
+            Vector3 destination=new Vector3(position.x/25f,.06f,position.y/25f);
+            Vector2 drop=grab+(Vector2)(camera.WorldToScreenPoint(destination)-camera.WorldToScreenPoint(original));
+            app.ProcessPlacementPointer(drop,false,true,false);
+            yield return new WaitForSecondsRealtime(.4f);
+            // Leave the authoritative client snapshot stale while the real TCP server accepts the release.
+            app.SnapshotPauseUntil=Time.unscaledTime+.7f;
+            app.ProcessPlacementPointer(drop,false,false,true);
+            float staleUntil=Time.unscaledTime+.44f;
+            while(Time.unscaledTime<staleUntil)
+            {
+                if(Vector3.Distance(destination,placed.transform.position)>.14f){Fail("released creature snapped back during delayed snapshot");yield break;}
+                yield return null;
+            }
+            if(Mathf.Abs(app.Me.units[0].x-position.x)<.1f&&Mathf.Abs(app.Me.units[0].y-position.y)<.1f){Fail("delay regression did not exercise a stale snapshot");yield break;}
+            deadline=Time.realtimeSinceStartup+5;
+            while(string.IsNullOrEmpty(app.Me.units[0].placementId)&&Time.realtimeSinceStartup<deadline)yield return null;
+            if(string.IsNullOrEmpty(app.Me.units[0].placementId)||Mathf.Abs(app.Me.units[0].x-position.x)>1||Mathf.Abs(app.Me.units[0].y-position.y)>1){Fail("drag release did not receive matching server placement");yield break;}
+            app.VerificationPointer=new Vector2(-200,-200);
+            yield return new WaitForSecondsRealtime(.25f);
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"03-preparation.png"));
+            yield return new WaitForSecondsRealtime(.5f);
+            app.ShowShop=true;
+            ShopOffer gear=null;foreach(var offer in app.Me.market)if(offer.kind=="equipment"&&offer.price<=app.Me.gold){gear=offer;break;}
+            if(gear==null){Fail("no affordable equipment for native market verification");yield break;}
+            int balance=app.Me.gold;string gearId=gear.itemId,offerId=gear.id;
+            app.Send(new GameCommand{type="purchase",offerId=offerId,unitId=unit.id});
+            yield return new WaitForSecondsRealtime(.6f);
+            if(app.Me.gold!=balance-gear.price||!app.Me.units[0].equipment.Contains(gearId)){Fail("native equipment purchase was not synchronized");yield break;}
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"06-market.png"));
+            yield return new WaitForSecondsRealtime(.4f);
+            app.ShowShop=false;app.ShowBestiary=true;
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"07-bestiary.png"));
+            yield return new WaitForSecondsRealtime(.5f);
+            app.ShowBestiary=false;
+            if(!app.Me.ready)app.Send(new GameCommand{type="ready"});
+            Debug.Log("ARENA_SMOKE_READY_SENT "+Describe(app));
+            deadline=Time.realtimeSinceStartup+15;
+            while(app.State.phase!="battle"&&Time.realtimeSinceStartup<deadline)yield return null;
+            if(app.State.phase!="battle"){ScreenCapture.CaptureScreenshot(Path.Combine(folder,"failure.png"));Fail("battle transition failed: "+Describe(app));yield break;}
+            yield return new WaitForSecondsRealtime(2);
+            if(VisibleBars(app)!=0){Fail("battle health bars visible without hover");yield break;}
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"04-battle.png"));
+            yield return new WaitForSecondsRealtime(.15f);
+            float previousSize=camera.orthographicSize;
+            app.World.Zoom(2.5f,new Vector2(Screen.width*.5f,Screen.height*.5f));
+            yield return new WaitForSecondsRealtime(.9f);
+            if(camera.orthographicSize>=previousSize*.93f){Fail("mouse-wheel camera zoom did not magnify arena");yield break;}
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"08-battle-zoom.png"));
+            yield return new WaitForSecondsRealtime(.25f);
+            VoxelCreature inspected=null;
+            var candidates=app.World.GetComponentsInChildren<VoxelCreature>();
+            Array.Sort(candidates,(a,b)=>(a.Kind=="skeleton"?0:1).CompareTo(b.Kind=="skeleton"?0:1));
+            foreach(var candidate in candidates)
+            {
+                if(candidate.Kind=="steve"||candidate.Dead||candidate.Slot==app.Me.slot)continue;
+                Vector2 screen=camera.WorldToScreenPoint(candidate.transform.position+Vector3.up*(candidate.Height*candidate.Size*.5f));
+                app.InspectPointer(screen);
+                if(app.World.HoveredCreature!=null&&app.World.HoveredCreature.Slot!=app.Me.slot){inspected=app.World.HoveredCreature;break;}
+            }
+            if(inspected==null){Fail("enemy hover picking failed");yield break;}
+            float inspectUntil=Time.unscaledTime+.6f;
+            bool captured=false;
+            while(Time.unscaledTime<inspectUntil)
+            {
+                app.VerificationPointer=camera.WorldToScreenPoint(inspected.transform.position+Vector3.up*(inspected.Height*inspected.Size*.5f));
+                app.InspectPointer(app.VerificationPointer.Value);
+                if(!captured&&Time.unscaledTime>inspectUntil-.35f)
+                {
+                    if(app.World.HoveredCreature==null||!app.World.HoveredCreature.HealthBarVisible||VisibleBars(app)!=1){Fail("hover must show exactly one creature health bar");yield break;}
+                    ScreenCapture.CaptureScreenshot(Path.Combine(folder,"05-hover.png"));captured=true;
+                }
+                yield return null;
+            }
+            app.VerificationPointer=new Vector2(-200,-200);
+            yield return null;
+            if(VisibleBars(app)!=0){Fail("health bar persisted after mouse leave");yield break;}
+            app.VerificationPointer=null;
+            int beforeIncome=app.Me.gold;
+            deadline=Time.realtimeSinceStartup+ArenaGame.BattleSeconds+8;
+            while(app.State.phase=="battle"&&Time.realtimeSinceStartup<deadline)yield return null;
+            if(app.State.phase!="results"||app.Me.lastIncome!=6+app.Me.roundKills+Mathf.Max(1,5-app.Me.lastRank)||app.Me.gold!=beforeIncome+app.Me.lastIncome)
+            {Fail("native round settlement or income synchronization failed");yield break;}
+            yield return new WaitForSecondsRealtime(.2f);
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"10-income-results.png"));
+            deadline=Time.realtimeSinceStartup+10;
+            while(app.State.phase=="results"&&Time.realtimeSinceStartup<deadline)yield return null;
+            if(app.State.phase!="recruit"||!app.Me.recruitPending){Fail("next paid recruitment failed");yield break;}
+            yield return new WaitForSecondsRealtime(.3f);
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"11-next-recruit.png"));
+            yield return new WaitForSecondsRealtime(.4f);
+            app.Leave();app.enabled=false;
+            var gallery=new GameState{phase="battle",timeLeft=55};
+            var curator=new PlayerState{id="gallery",name="图鉴",slot=0,hp=20,steve=new Point2(0,440)};gallery.players.Add(curator);
+            for(int page=0;page<3;page++)
+            {
+                gallery.fighters.Clear();int start=page*30,end=Math.Min(start+30,CreatureCatalog.Kinds.Length);
+                for(int i=start;i<end;i++)
+                {
+                    string kind=CreatureCatalog.Kinds[i];var f=ArenaGame.PreviewFighter(curator,new UnitState{id="gallery-"+i,kind=kind});
+                    int cell=i-start;f.x=(cell%6-2.5f)*84;f.y=(cell/6-2)*95;gallery.fighters.Add(f);
+                }
+                app.World.ResetView();app.World.SetState(gallery,"gallery");
+                app.World.Zoom(3,new Vector2(Screen.width*.5f,Screen.height*.5f));
+                yield return new WaitForSecondsRealtime(1);
+                int count=0;foreach(var v in app.World.GetComponentsInChildren<VoxelCreature>())if(v.Kind!="steve")count++;
+                if(count!=end-start){Fail("bestiary model page "+page+" rendered "+count+" instead of "+(end-start));yield break;}
+                ScreenCapture.CaptureScreenshot(Path.Combine(folder,"09-creatures-"+(page+1)+".png"));
+                yield return new WaitForSecondsRealtime(.4f);
+            }
+            Debug.Log("ARENA_SMOKE_OK native host / paid recruit or skip / equipment purchase / real drag / 700ms stale snapshot / placement acknowledgement / hidden bars / enemy hover / zoom / actual round income / next recruitment / 89 creature models / screenshots");
+            if(Array.IndexOf(args,"-smoke-exit")>=0)Application.Quit(0);
+            else {app.VerificationInput=false;app.enabled=true;app.World.Clear();}
+            Destroy(gameObject);
+        }
+        static int VisibleBars(ArenaApp app){int count=0;foreach(var v in app.World.GetComponentsInChildren<VoxelCreature>())if(v.HealthBarVisible)count++;return count;}
+        static string Describe(ArenaApp app){string value="connected="+app.Connected+" phase="+app.State.phase+" time="+app.State.timeLeft+" status="+app.Status;foreach(var p in app.State.players)value+=" | "+p.name+" ready="+p.ready+" pending="+p.recruitPending+" bot="+p.bot;return value;}
+        static void Fail(string message){Debug.LogError("ARENA_SMOKE_FAILED "+message);Application.Quit(2);}
+    }
+}
