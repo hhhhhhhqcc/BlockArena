@@ -10,7 +10,7 @@ if (Test-Path -LiteralPath $targetRoot) {
     }
 }
 New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
-$entries = @('Assets','Packages','ProjectSettings','Builds','Captures','README.md','验证记录.md','生物图鉴.md','开始游戏.cmd','打开Unity工程.cmd','启动专用服务器.cmd','.gitignore')
+$entries = @('Assets','Packages','ProjectSettings','Builds','Captures','README.md','Windows-试玩说明.md','验证记录.md','生物图鉴.md','CHANGELOG.md','开始游戏.cmd','打开Unity工程.cmd','启动专用服务器.cmd','.gitignore','.gitattributes')
 foreach ($entry in $entries) {
     $sourceEntry = Join-Path $sourceRoot $entry
     if (Test-Path -LiteralPath $sourceEntry) {
@@ -20,6 +20,9 @@ foreach ($entry in $entries) {
 $targetTools = Join-Path $targetRoot 'Tools'
 New-Item -ItemType Directory -Path $targetTools -Force | Out-Null
 Copy-Item -LiteralPath $PSCommandPath -Destination $targetTools -Force
+foreach ($audioTool in @('Generate-ArenaAudio.py','ArenaAudio-Notes.md')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $audioTool) -Destination $targetTools -Force
+}
 foreach ($suite in @('CoreChecks','NetworkChecks')) {
     $targetSuite = Join-Path $targetTools $suite
     New-Item -ItemType Directory -Path $targetSuite -Force | Out-Null
@@ -27,4 +30,4 @@ foreach ($suite in @('CoreChecks','NetworkChecks')) {
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $targetSuite -Force }
 }
 Write-Output ('EXPORTED_PROJECT ' + $targetRoot)
-Get-Item -LiteralPath (Join-Path $targetRoot 'Builds\Windows\BlockArena.exe') | Select-Object FullName,Length
+Get-Item -LiteralPath (Join-Path $targetRoot 'Builds\Windows-0.6.0\BlockArena.exe') | Select-Object FullName,Length

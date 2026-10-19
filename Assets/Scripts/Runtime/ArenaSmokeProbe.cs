@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using BlockArena.Core;
 using BlockArena.Presentation;
@@ -10,6 +11,26 @@ namespace BlockArena.Runtime
     // Opt-in smoke driver for the built native player; it is inactive in ordinary play.
     public sealed class ArenaSmokeProbe : MonoBehaviour
     {
+        readonly Dictionary<string,int> combatBalances=new Dictionary<string,int>();
+        bool watchCombat,realtimeIncomeObserved,incomeFailed;
+        string captureFolder;
+
+        void Update()
+        {
+            var app=ArenaApp.Instance;
+            if(!watchCombat||incomeFailed||app==null||app.State==null||app.State.phase!="battle")return;
+            foreach(var player in app.State.players)
+            {
+                int startingBalance;
+                if(combatBalances.TryGetValue(player.id,out startingBalance)&&player.gold!=startingBalance+player.roundKills)
+                {incomeFailed=true;Fail("kill gold not awarded in real time to "+player.name);return;}
+                if(player.roundKills>0&&!realtimeIncomeObserved)
+                {
+                    realtimeIncomeObserved=true;
+                    ScreenCapture.CaptureScreenshot(Path.Combine(captureFolder,"12-realtime-income.png"));
+                }
+            }
+        }
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void StartIfRequested()
         {
@@ -23,9 +44,23 @@ namespace BlockArena.Runtime
             string folder=Path.Combine(Application.dataPath,"..","Captures");
             for(int i=0;i+1<args.Length;i++)if(args[i]=="-capture-dir")folder=args[i+1];
             Directory.CreateDirectory(folder);
+            captureFolder=folder;
             var app=ArenaApp.Instance;
             app.VerificationInput=true;
             yield return new WaitForSecondsRealtime(1.5f);
+            if(app.Sound==null||app.Sound.ClipsLoaded!=23||app.Sound.MusicTrackCount!=3||!app.Sound.MusicIsPlaying)
+            {Fail("original music or sound assets not loaded");yield break;}
+            string menuTrack=app.Sound.CurrentMusic;
+            int soundBaseline=app.Sound.SoundCount;
+            float savedMusic=app.Sound.MusicVolume,savedEffects=app.Sound.SfxVolume;
+            bool savedMute=app.Sound.Muted;
+            app.Sound.SetVolumes(savedMusic,.6f);
+            app.Sound.Play("click",Vector3.zero,1);
+            app.Sound.SetVolumes(savedMusic,savedEffects,savedMute);
+            if(app.Sound.SoundCount<=soundBaseline){Fail("sound source did not play the click cue");yield break;}
+            Texture2D cursorPreview=app.VerifyCursor();
+            File.WriteAllBytes(Path.Combine(folder,"00-soul-cursors.png"),cursorPreview.EncodeToPNG());
+            Destroy(cursorPreview);
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"01-menu.png"));
             yield return new WaitForSecondsRealtime(.5f);
             app.Host(true);
@@ -33,6 +68,13 @@ namespace BlockArena.Runtime
             while((app.State==null||app.State.phase!="recruit")&&Time.realtimeSinceStartup<deadline)yield return null;
             if(app.State==null||app.State.phase!="recruit"){Fail("recruit handshake failed: "+app.Status);yield break;}
             yield return new WaitForSecondsRealtime(1.2f);
+            app.Hud.ShowAudio=true;
+            yield return new WaitForSecondsRealtime(.3f);
+            if(!app.Hud.Contains(app.Hud.AudioScreenRect.center)){Fail("audio panel pointer region missing");yield break;}
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"16-audio-controls.png"));
+            yield return new WaitForSecondsRealtime(.2f);
+            app.Hud.ShowAudio=false;
+            if(app.Hud.CoinFeedbackCount!=0){Fail("opening balance replayed as combat income");yield break;}
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"02-recruit.png"));
             yield return new WaitForSecondsRealtime(.5f);
             int choice=-1,price=999;
@@ -75,12 +117,51 @@ namespace BlockArena.Runtime
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"03-preparation.png"));
             yield return new WaitForSecondsRealtime(.5f);
             app.ShowShop=true;
+            yield return new WaitForSecondsRealtime(.65f);
+            Rect marketBefore=app.Hud.MarketScreenRect;
+            Vector2 titleGrab=new Vector2(marketBefore.x+marketBefore.width*.3f,marketBefore.yMax-20);
+            Vector2 movedTitle=titleGrab+new Vector2(-90,55);
+            string selectedBefore=app.SelectedId;
+            Point2 steveBefore=app.Me.steve;
+            Vector3 creatureBefore=placed.transform.position;
+            app.Hud.ProcessMarketPointer(titleGrab,true,true,false);
+            if(!app.Hud.PointerCaptured){Fail("market title did not capture pointer");yield break;}
+            app.ProcessPlacementPointer(titleGrab,true,true,false);
+            app.Hud.ProcessMarketPointer(movedTitle,false,true,false);
+            app.ProcessPlacementPointer(movedTitle,false,true,false);
+            app.Hud.ProcessMarketPointer(movedTitle,false,false,true);
+            app.ProcessPlacementPointer(movedTitle,false,false,true);
+            yield return new WaitForSecondsRealtime(.25f);
+            Rect marketAfter=app.Hud.MarketScreenRect;
+            if((marketAfter.position-marketBefore.position).sqrMagnitude<25||app.Hud.PointerCaptured||!app.Hud.Contains(marketAfter.center))
+            {Fail("market drag position, release or hit area failed");yield break;}
+            if(app.SelectedId!=selectedBefore||Vector3.Distance(creatureBefore,placed.transform.position)>.04f||Mathf.Abs(app.Me.steve.x-steveBefore.x)>.1f||Mathf.Abs(app.Me.steve.y-steveBefore.y)>.1f)
+            {Fail("market drag leaked into creature or commander movement");yield break;}
+            Vector2 clampGrab=new Vector2(marketAfter.x+marketAfter.width*.3f,marketAfter.yMax-20);
+            app.Hud.ProcessMarketPointer(clampGrab,true,true,false);
+            app.Hud.ProcessMarketPointer(new Vector2(-Screen.width,Screen.height*2),false,true,false);
+            app.Hud.ProcessMarketPointer(new Vector2(-Screen.width,Screen.height*2),false,false,true);
+            Rect clamped=app.Hud.MarketScreenRect;
+            if(clamped.x<0||clamped.y<0||clamped.xMax>Screen.width+.5f||clamped.yMax>Screen.height+.5f)
+            {Fail("market can be dragged outside the display");yield break;}
+            // Return the window to its useful saved location before checking close/reopen persistence.
+            Vector2 restoreGrab=new Vector2(clamped.x+clamped.width*.3f,clamped.yMax-20);
+            Vector2 restoreDrop=restoreGrab+(marketAfter.position-clamped.position);
+            app.Hud.ProcessMarketPointer(restoreGrab,true,true,false);
+            app.Hud.ProcessMarketPointer(restoreDrop,false,true,false);
+            app.Hud.ProcessMarketPointer(restoreDrop,false,false,true);
+            Rect persisted=app.Hud.MarketScreenRect;
+            app.ShowShop=false;yield return new WaitForSecondsRealtime(.3f);
+            app.ShowShop=true;yield return new WaitForSecondsRealtime(.6f);
+            if((app.Hud.MarketScreenRect.position-persisted.position).sqrMagnitude>1)
+            {Fail("market close/reopen lost the dragged location");yield break;}
             ShopOffer gear=null;foreach(var offer in app.Me.market)if(offer.kind=="equipment"&&offer.price<=app.Me.gold){gear=offer;break;}
             if(gear==null){Fail("no affordable equipment for native market verification");yield break;}
             int balance=app.Me.gold;string gearId=gear.itemId,offerId=gear.id;
             app.Send(new GameCommand{type="purchase",offerId=offerId,unitId=unit.id});
             yield return new WaitForSecondsRealtime(.6f);
             if(app.Me.gold!=balance-gear.price||!app.Me.units[0].equipment.Contains(gearId)){Fail("native equipment purchase was not synchronized");yield break;}
+            if(app.Hud.CoinFeedbackCount!=0){Fail("spending generated a positive income animation");yield break;}
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"06-market.png"));
             yield return new WaitForSecondsRealtime(.4f);
             app.ShowShop=false;app.ShowBestiary=true;
@@ -92,7 +173,11 @@ namespace BlockArena.Runtime
             deadline=Time.realtimeSinceStartup+15;
             while(app.State.phase!="battle"&&Time.realtimeSinceStartup<deadline)yield return null;
             if(app.State.phase!="battle"){ScreenCapture.CaptureScreenshot(Path.Combine(folder,"failure.png"));Fail("battle transition failed: "+Describe(app));yield break;}
+            int roundStartingGold=app.Me.gold-app.Me.roundKills;
+            foreach(var player in app.State.players)combatBalances[player.id]=player.gold-player.roundKills;
+            watchCombat=true;
             yield return new WaitForSecondsRealtime(2);
+            if(app.Sound.CurrentMusic==menuTrack){Fail("battle music did not change from the preparation theme");yield break;}
             if(VisibleBars(app)!=0){Fail("battle health bars visible without hover");yield break;}
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"04-battle.png"));
             yield return new WaitForSecondsRealtime(.15f);
@@ -130,12 +215,32 @@ namespace BlockArena.Runtime
             yield return null;
             if(VisibleBars(app)!=0){Fail("health bar persisted after mouse leave");yield break;}
             app.VerificationPointer=null;
-            int beforeIncome=app.Me.gold;
             deadline=Time.realtimeSinceStartup+ArenaGame.BattleSeconds+8;
             while(app.State.phase=="battle"&&Time.realtimeSinceStartup<deadline)yield return null;
-            if(app.State.phase!="results"||app.Me.lastIncome!=6+app.Me.roundKills+Mathf.Max(1,5-app.Me.lastRank)||app.Me.gold!=beforeIncome+app.Me.lastIncome)
+            watchCombat=false;
+            if(incomeFailed)yield break;
+            if(!realtimeIncomeObserved){Fail("combat did not exercise real-time kill income");yield break;}
+            if(app.State.phase!="results"||app.Me.lastIncome!=6+app.Me.roundKills+Mathf.Max(1,5-app.Me.lastRank)||app.Me.gold!=roundStartingGold+app.Me.lastIncome)
             {Fail("native round settlement or income synchronization failed");yield break;}
-            yield return new WaitForSecondsRealtime(.2f);
+            yield return null;
+            int expectedHits=0;foreach(var placement in app.State.placements)if(placement.damage>0)expectedHits++;
+            int hitCount=app.World.CommanderHitCount;
+            if(hitCount!=expectedHits){Fail("commander hit count differs from authoritative damage: "+hitCount+" / "+expectedHits);yield break;}
+            app.World.SetState(app.State,app.PlayerId);
+            if(app.World.CommanderHitCount!=hitCount){Fail("duplicate snapshot replayed commander impact");yield break;}
+            int coinCount=app.Hud.CoinFeedbackCount;
+            app.Hud.ObserveState(app.State,app.State);
+            if(coinCount==0||app.Hud.CoinFeedbackCount!=coinCount){Fail("income feedback missing or replayed for same snapshot");yield break;}
+            Debug.Log("ARENA_IMPACT_ARMED time="+app.State.timeLeft+" hits="+hitCount+" active="+app.World.HasCommanderHitAnimation);
+            yield return new WaitForSecondsRealtime(.7f);
+            if(expectedHits>0&&!app.World.HasCommanderHitAnimation){Fail("commander impact ended before the animated feedback; phase="+app.State.phase+" time="+app.State.timeLeft+" hits="+app.World.CommanderHitCount);yield break;}
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"13-ritual-rise.png"));
+            deadline=Time.realtimeSinceStartup+5;
+            while(app.World.RitualActive&&app.World.RitualAge<1.75f&&Time.realtimeSinceStartup<deadline)yield return null;
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"14-crystal-attack.png"));
+            while(app.World.RitualActive&&app.World.RitualImpactCount<expectedHits&&Time.realtimeSinceStartup<deadline)yield return null;
+            if(app.World.RitualImpactCount!=expectedHits||app.World.RitualLaunchCount!=expectedHits)
+            {Fail("crystal ritual failed to launch and land once per defeated commander");yield break;}
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"10-income-results.png"));
             deadline=Time.realtimeSinceStartup+10;
             while(app.State.phase=="results"&&Time.realtimeSinceStartup<deadline)yield return null;
@@ -162,7 +267,7 @@ namespace BlockArena.Runtime
                 ScreenCapture.CaptureScreenshot(Path.Combine(folder,"09-creatures-"+(page+1)+".png"));
                 yield return new WaitForSecondsRealtime(.4f);
             }
-            Debug.Log("ARENA_SMOKE_OK native host / paid recruit or skip / equipment purchase / real drag / 700ms stale snapshot / placement acknowledgement / hidden bars / enemy hover / zoom / actual round income / next recruitment / 89 creature models / screenshots");
+            Debug.Log("ARENA_SMOKE_OK native host / paid recruit or skip / draggable market / captured input / screen clamp / saved window position / equipment purchase / real drag / 700ms stale snapshot / placement acknowledgement / hidden bars / enemy hover / zoom / real-time kill income / settlement without duplicate gold / rising crystal pillar / sequential ritual launch and impact without replay / original music and sound clips / audio controls / next recruitment / 89 creature models / screenshots");
             if(Array.IndexOf(args,"-smoke-exit")>=0)Application.Quit(0);
             else {app.VerificationInput=false;app.enabled=true;app.World.Clear();}
             Destroy(gameObject);

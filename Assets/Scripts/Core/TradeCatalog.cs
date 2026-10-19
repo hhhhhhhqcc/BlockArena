@@ -6,7 +6,6 @@ namespace BlockArena.Core
     public static class TradeCatalog
     {
         public const int RefreshPrice = 2, EquipmentSlots = 3;
-        public const float RefreshSeconds = 12;
         static readonly Dictionary<string, TradeDefinition> items = new Dictionary<string, TradeDefinition>();
         public static readonly string[] Ids;
 

@@ -138,12 +138,6 @@ namespace BlockArena.Core
             }
             if (State.phase == "lobby" || State.phase == "finished") return;
             State.timeLeft = Math.Max(0, State.timeLeft - dt);
-            if (State.phase == "recruit" || State.phase == "prep")
-                foreach (PlayerState p in Living()) if (!p.recruitPending)
-                {
-                    p.shopRefreshLeft -= dt;
-                    if (p.shopRefreshLeft <= 0) RefreshMarket(p);
-                }
             if (State.phase == "recruit")
             {
                 foreach (PlayerState p in Living())
@@ -226,7 +220,7 @@ namespace BlockArena.Core
         }
         private void RefreshMarket(PlayerState p)
         {
-            p.market.Clear(); p.shopRefreshLeft = TradeCatalog.RefreshSeconds;
+            p.market.Clear(); p.shopRefreshLeft = 0;
             var equipment = TradeCatalog.Ids.Where(id => TradeCatalog.Get(id).type == "equipment").ToList();
             var skills = TradeCatalog.Ids.Where(id => TradeCatalog.Get(id).type == "skill" && !p.upgrades.Contains(id)).ToList();
             for (int i = 0; i < 4; i++)
@@ -441,7 +435,7 @@ namespace BlockArena.Core
                 if (target.hp <= 0)
                 {
                     if (!target.summoned && attacker != null && attacker.ownerId != target.ownerId)
-                    { PlayerState killer = Player(attacker.ownerId); killer.roundKills++; killer.totalKills++; }
+                    { PlayerState killer = Player(attacker.ownerId); killer.roundKills++; killer.totalKills++; killer.gold++; }
                     Kill(target);
                 }
                 if (damageDepth == 1) CreatureAbilities.AfterDamage(target, actual, attacker, Damage, AbilityEffect);
@@ -566,7 +560,8 @@ namespace BlockArena.Core
                     PlayerState p = Player(id); int amount = baseDamage == 0 ? 0 : baseDamage + lateDamage;
                     p.hp = Math.Max(0, p.hp - amount); p.eliminated = p.hp == 0; p.ready = false;
                     p.lastRank = rank; p.baseIncome = 6; p.killIncome = p.roundKills; p.rankIncome = Math.Max(1, 5 - rank);
-                    p.lastIncome = p.baseIncome + p.killIncome + p.rankIncome; p.gold += p.lastIncome;
+                    // Kill gold was credited at the lethal hit; the summary still describes the whole round.
+                    p.lastIncome = p.baseIncome + p.killIncome + p.rankIncome; p.gold += p.baseIncome + p.rankIncome;
                     State.placements.Add(new PlacementState { playerId = id, rank = rank, damage = amount, kills = p.roundKills,
                         income = p.lastIncome, baseIncome = p.baseIncome, killIncome = p.killIncome, rankIncome = p.rankIncome });
                 }

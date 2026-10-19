@@ -37,7 +37,7 @@ namespace BlockArena.Editor
         {
             PlayerSettings.companyName = "BlockArena";
             PlayerSettings.productName = "方块斗兽场";
-            PlayerSettings.bundleVersion = "0.4.0";
+            PlayerSettings.bundleVersion = "0.6.0";
             PlayerSettings.SetScriptingBackend(BuildTargetGroup.Standalone, ScriptingImplementation.Mono2x);
             PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.Standalone, ApiCompatibilityLevel.NET_Standard_2_0);
             PlayerSettings.defaultScreenWidth = 1440; PlayerSettings.defaultScreenHeight = 900;
@@ -60,11 +60,12 @@ namespace BlockArena.Editor
         public static void BuildWindows()
         {
             EnsureScene(); Configure();
-            Directory.CreateDirectory("Builds/Windows");
+            string output = "Builds/Windows-" + PlayerSettings.bundleVersion;
+            Directory.CreateDirectory(output);
             var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
             {
                 scenes = new[] { ScenePath },
-                locationPathName = "Builds/Windows/BlockArena.exe",
+                locationPathName = output + "/BlockArena.exe",
                 target = BuildTarget.StandaloneWindows64,
                 options = BuildOptions.None
             });

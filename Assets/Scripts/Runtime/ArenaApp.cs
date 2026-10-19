@@ -28,6 +28,7 @@ namespace BlockArena.Runtime
         public string Status = "", SelectedId;
         public bool ShowRoom, ShowHelp, ShowShop, ShowBestiary;
         public ArenaWorld World { get; private set; }
+        public ArenaAudio Sound { get; private set; }
         public string LocalAddresses { get; private set; }
         public string Notice { get { return Time.unscaledTime < noticeUntil ? notice : ""; } }
         public bool CanPrepare
@@ -41,6 +42,9 @@ namespace BlockArena.Runtime
         ArenaServer server;
         ArenaClient client;
         ArenaHud hud;
+        ArenaCursor pointer;
+        internal ArenaHud Hud { get { return hud; } }
+        internal Texture2D VerifyCursor() { return pointer.VerifyAndCreatePreview(); }
         readonly PlacementPreview placements = new PlacementPreview();
         GameState previous;
         string dragId, notice = "", lastNetworkError;
@@ -49,6 +53,8 @@ namespace BlockArena.Runtime
         Point2? walkTarget;
         int lastErrorVersion;
         float nextMove, noticeUntil;
+        float outcomeSoundAt;
+        string outcomeSound;
         bool wasMoving, quickStart, headless;
         internal float SnapshotPauseUntil;
         internal Vector2? VerificationPointer;
@@ -93,7 +99,18 @@ namespace BlockArena.Runtime
             World.transform.SetParent(transform, false);
             World.Initialize();
             World.PlacementPosition = PreviewPosition;
+            Sound = ArenaAudio.Initialize();
+            if (Sound != null) World.SoundCue = Sound.Play;
             hud = new ArenaHud(this);
+            hud.CommanderImpactPending = id => World.CommanderImpactPending(id);
+            if (Sound != null)
+            {
+                hud.SetAudioVolumes(Sound.Muted ? 0 : Sound.MusicVolume, Sound.Muted ? 0 : Sound.SfxVolume);
+                hud.AudioVolumesChanged = (music, effects) => Sound.SetVolumes(music, effects);
+                hud.SoundCue = cue => Sound.Play(cue, Vector3.zero, 1);
+                Sound.SetPhase("menu");
+            }
+            pointer = new ArenaCursor();
             if (Array.IndexOf(args, "-quickplay") >= 0) Host(true);
             else if (Array.IndexOf(args, "-join") >= 0) Join();
         }
@@ -156,6 +173,7 @@ namespace BlockArena.Runtime
 
         void SavePreferences()
         {
+            if (VerificationInput) return;
             PlayerPrefs.SetString("arena.name", PlayerName.Trim());
             PlayerPrefs.SetString("arena.address", Address.Trim());
             PlayerPrefs.SetString("arena.port", PortText);
@@ -166,6 +184,10 @@ namespace BlockArena.Runtime
         {
             if (client == null || string.IsNullOrEmpty(client.ResumeToken)) return;
             placements.Clear(); CancelDragging(); lastErrorVersion = 0;
+            previous = null; SelectedId = null;
+            outcomeSound = null;
+            if (hud != null) hud.ObserveState(null, null);
+            if (World != null) World.Clear();
             string token = client.ResumeToken;
             client.Dispose();
             client = new ArenaClient(new UnityWireCodec());
@@ -188,6 +210,9 @@ namespace BlockArena.Runtime
             if (client != null) { client.Dispose(); client = null; }
             if (server != null) { server.Dispose(); server = null; }
             previous = null; quickStart = false; lastNetworkError = null;
+            outcomeSound = null;
+            if (Sound != null) Sound.SetPhase("menu");
+            if (hud != null) hud.ObserveState(null, null);
             placements.Clear(); CancelDragging(); lastErrorVersion = 0;
         }
 
@@ -206,7 +231,8 @@ namespace BlockArena.Runtime
             if (headless) return;
             if (!VerificationInput && Input.GetKeyDown(KeyCode.Escape))
             {
-                if (ShowHelp) ShowHelp = false;
+                if (hud.ShowAudio) hud.ShowAudio = false;
+                else if (ShowHelp) ShowHelp = false;
                 else if (ShowBestiary) ShowBestiary = false;
                 else if (ShowShop) ShowShop = false;
                 else if (State != null) ShowRoom = !ShowRoom;
@@ -214,7 +240,7 @@ namespace BlockArena.Runtime
             }
             if (!VerificationInput && Input.GetKeyDown(KeyCode.M) && CanPrepare && !ShowRoom && !ShowHelp && !ShowBestiary) ShowShop = !ShowShop;
             if (!VerificationInput && Input.GetKeyDown(KeyCode.B) && !ShowRoom && !ShowHelp) ShowBestiary = !ShowBestiary;
-            if (!VerificationInput && !hud.Contains(Input.mousePosition))
+            if (!VerificationInput && !hud.PointerCaptured && !hud.Contains(Input.mousePosition))
             {
                 float scroll = Input.mouseScrollDelta.y;
                 if (Mathf.Abs(scroll) > .01f) World.Zoom(scroll, Input.mousePosition);
@@ -244,10 +270,11 @@ namespace BlockArena.Runtime
                         placements.Clear();
                         ShowShop = false;
                     }
-                    if (State.phase == "battle") Notify("四方开战 · 军团自动作战");
                 }
-                previous = State;
                 World.SetState(State, client.PlayerId);
+                hud.ObserveState(previous, State);
+                ObserveAudio(previous, State);
+                previous = State;
                 if (quickStart && Connected && State.phase == "lobby")
                 {
                     quickStart = false;
@@ -256,9 +283,14 @@ namespace BlockArena.Runtime
             }
             if (!Connected) placements.Clear();
             else if (placements.Reconcile(Me, Time.unscaledTime)) Notify("摆位确认超时，已同步服务器位置。");
-            if (!CanPrepare || ShowRoom || ShowHelp || ShowBestiary)
+            if (!CanPrepare || ShowRoom || ShowHelp || ShowBestiary || hud.PointerCaptured)
             {
                 CancelDragging();
+                if (hud.PointerCaptured)
+                {
+                    walkTarget = null;
+                    if (wasMoving) { Send(new GameCommand { type = "move", dx = 0, dy = 0 }); wasMoving = false; }
+                }
             }
             else if (!VerificationInput)
             {
@@ -266,17 +298,56 @@ namespace BlockArena.Runtime
                 HandleMovement();
             }
             World.SetSelectedUnit(SelectedId);
+            if (outcomeSound != null && Time.unscaledTime >= outcomeSoundAt && (World == null || !World.RitualActive))
+            {
+                if (Sound != null) Sound.Play(outcomeSound, Vector3.zero, 1);
+                outcomeSound = null;
+            }
             InspectPointer(VerificationPointer ?? (Vector2)Input.mousePosition);
+            UpdateCursor();
+        }
+
+        void UpdateCursor()
+        {
+            if (pointer == null || VerificationInput) return;
+            Vector2 mouse = Input.mousePosition;
+            ArenaCursor.Kind kind = ArenaCursor.Kind.Arrow;
+            if (hud.PointerCaptured || dragId != null) kind = ArenaCursor.Kind.Grabbing;
+            else if (Input.GetMouseButton(2) && !hud.Contains(mouse)) kind = ArenaCursor.Kind.Move;
+            else if (hud.WantsTextCursor(mouse)) kind = ArenaCursor.Kind.Text;
+            else if (hud.WantsHandCursor(mouse)) kind = ArenaCursor.Kind.Hand;
+            else if (World.HoveredCreature != null) kind = CanPrepare && World.HoveredCreature.Slot == Me.slot ? ArenaCursor.Kind.Grab : ArenaCursor.Kind.Inspect;
+            pointer.Update(kind, mouse, Input.GetMouseButtonDown(0), Input.GetMouseButton(0));
         }
 
         static bool IsPlacementPhase(string phase) { return phase == "prep" || phase == "recruit"; }
+        void ObserveAudio(GameState before, GameState next)
+        {
+            if (Sound == null) return;
+            if (next.phase != "finished") outcomeSound = null;
+            Sound.SetPhase(next.phase);
+            if (before == null) return;
+            if (before.phase != next.phase)
+            {
+                if (next.phase == "battle") Sound.Play("battle_start", Vector3.zero, 1);
+                if (next.phase == "recruit") Sound.Play("recruit", Vector3.zero, .75f);
+                if (next.phase == "finished")
+                {
+                    outcomeSound = Me != null && !Me.eliminated ? "victory" : "defeat";
+                    outcomeSoundAt = Time.unscaledTime + 4.5f;
+                }
+            }
+            PlayerState prior = before.players.Find(p => p.id == PlayerId);
+            if (prior != null && Me != null && Me.gold > prior.gold)
+                Sound.Play("coin", Vector3.zero, .65f);
+        }
         Point2? PreviewPosition(string unitId) { Point2 position; return placements.TryGet(unitId, out position) ? (Point2?)position : null; }
         void CancelDragging() { dragId = null; if (World != null) World.SetDrag(null, null); }
 
         // Both physical mouse input and the opt-in native smoke driver use the same drag path.
         internal void ProcessPlacementPointer(Vector2 mouse, bool pressed, bool held, bool released)
         {
-            if (!CanPrepare || ShowRoom || ShowHelp || ShowBestiary) return;
+            if (!CanPrepare || ShowRoom || ShowHelp || ShowBestiary || hud.PointerCaptured) return;
             if (pressed && !hud.Contains(mouse))
             {
                 string id;
@@ -287,6 +358,7 @@ namespace BlockArena.Runtime
                     World.TryGetUnitPosition(id, out dragPoint);
                     dragOffset = World.TryGround(mouse, out ground) ? new Point2(dragPoint.x - ground.x, dragPoint.y - ground.y) : new Point2();
                     World.SetDrag(id, dragPoint);
+                    if (Sound != null) Sound.Play("pickup", PlacementSoundPosition(dragPoint), .7f);
                 }
                 else
                 {
@@ -311,6 +383,7 @@ namespace BlockArena.Runtime
                 {
                     dragPoint = ClampPlacement(new Point2(point.x + dragOffset.x, point.y + dragOffset.y));
                     Send(placements.Submit(dragId, dragPoint, Time.unscaledTime));
+                    if (Sound != null) Sound.Play("place", PlacementSoundPosition(dragPoint), .8f);
                 }
                 CancelDragging();
             }
@@ -319,7 +392,7 @@ namespace BlockArena.Runtime
         internal void InspectPointer(Vector2 mouse)
         {
             VoxelCreature visual; FighterState fighter;
-            if (State == null || !Connected || ShowRoom || ShowHelp || ShowBestiary || dragId != null ||
+            if (State == null || !Connected || ShowRoom || ShowHelp || ShowBestiary || dragId != null || hud.PointerCaptured ||
                 (!CanPrepare && State.phase != "battle") || hud.Contains(mouse) ||
                 !World.TryInspectCreature(mouse, out visual, out fighter))
             {
@@ -331,6 +404,8 @@ namespace BlockArena.Runtime
             UnitState unit = owner == null ? null : owner.units.Find(u => u.id == visual.UnitId);
             hud.SetInspection(definition, fighter, unit, owner, mouse);
         }
+
+        static Vector3 PlacementSoundPosition(Point2 point) { return new Vector3(point.x / 25f, 0, point.y / 25f); }
 
         Point2 ClampPlacement(Point2 point)
         {
@@ -363,12 +438,14 @@ namespace BlockArena.Runtime
             if (headless || hud == null) return;
             if (VerificationInput && (Event.current.isMouse || Event.current.isKey)) Event.current.Use();
             hud.Draw();
+            if (pointer != null) pointer.Draw();
         }
         void OnApplicationFocus(bool focus)
         {
             if (!focus) { walkTarget = null; CancelDragging(); }
+            if (!focus && pointer != null) pointer.Suspend();
         }
         void OnApplicationQuit() { StopNetwork(); }
-        void OnDestroy() { if (Instance == this) { StopNetwork(); Instance = null; } }
+        void OnDestroy() { if (Instance == this) { StopNetwork(); if (pointer != null) pointer.Dispose(); if (Sound != null) Destroy(Sound.gameObject); Instance = null; } }
     }
 }

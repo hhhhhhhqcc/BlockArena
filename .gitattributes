@@ -6,10 +6,12 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 *.unity text eol=lf
-*.asset text eol=lf
-*.meta text eol=lf
+*.asset text eol=lf whitespace=-blank-at-eol
+*.meta text eol=lf whitespace=-blank-at-eol
 *.ps1 text eol=lf
+*.py text eol=lf
 *.cmd text eol=crlf
 *.png binary
 *.jpg binary
 *.zip binary
+*.wav binary

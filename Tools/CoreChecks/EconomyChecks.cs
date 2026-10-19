@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using BlockArena.Core;
 
 internal static partial class Program
@@ -53,28 +54,63 @@ internal static partial class Program
             var unrelated=ArenaGame.PreviewFighter(p,new UnitState{id="future-cow",kind="cow"});Near(CreatureCatalog.Get("cow").hp,unrelated.maxHp);
             string before=Json(g.State);Reject(()=>g.Apply(p.id,new GameCommand{type="purchase",offerId="undead_legion"}));Equal(before,Json(g.State));
         });
-        Check("automatic and paid refreshes create fresh offer IDs and reject obsolete purchases", () =>
+        Check("paid refreshes replace offers once and never trigger a later automatic refresh", () =>
         {
             var g=Two();var p=g.State.players[0];p.gold=10;string old=p.market[0].id;
             g.Apply(p.id,new GameCommand{type="refresh"});Equal(8,p.gold);Equal(4,p.market.Count);Assert(p.market.All(o=>o.id!=old));
             string before=Json(g.State);Reject(()=>g.Apply(p.id,new GameCommand{type="purchase",offerId=old,unitId=p.units[0].id}));Equal(before,Json(g.State));
-            old=p.market[0].id;Advance(g,TradeCatalog.RefreshSeconds+.1f);Assert(p.market.All(o=>o.id!=old));Equal(8,p.gold);
+            string offers=JsonSerializer.Serialize(p.market,JsonOptions);
+            Advance(g,25);Equal("prep",g.State.phase);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));Equal(8,p.gold);Near(0,p.shopRefreshLeft);
             p.gold=1;before=Json(g.State);Reject(()=>g.Apply(p.id,new GameCommand{type="refresh"}));Equal(before,Json(g.State));
         });
-        Check("income itemizes base, real kills and army survival rank exactly once", () =>
+        Check("offers stay unchanged throughout recruitment waiting and the entire preparation phase", () =>
         {
-            var g=Two();var a=g.State.players[0];var b=g.State.players[1];a.roundKills=3;b.roundKills=1;
-            Battle(g);a.roundKills=3;b.roundKills=1;int goldA=a.gold,goldB=b.gold;Timeout(g);
-            Equal(13,a.lastIncome);Equal(10,b.lastIncome);Equal(goldA+13,a.gold);Equal(goldB+10,b.gold);
-            var result=g.State.placements.First(p=>p.playerId==a.id);Equal(3,result.kills);Equal(6,result.baseIncome);Equal(4,result.rankIncome);Equal(13,result.income);
-            Advance(g,1);Equal(goldA+13,a.gold);Equal(goldB+10,b.gold);
+            var g=Two(false);var p=g.State.players[0];g.Apply(p.id,new GameCommand{type="choose",index=0});
+            string offers=JsonSerializer.Serialize(p.market,JsonOptions);int gold=p.gold;
+            Advance(g,24);Equal("recruit",g.State.phase);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));
+            g.Apply("b",new GameCommand{type="choose",index=0});Equal("prep",g.State.phase);
+            Advance(g,ArenaGame.PrepSeconds-.2f);Equal("prep",g.State.phase);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));
+            Advance(g,.4f);Equal("battle",g.State.phase);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));Equal(gold,p.gold);Near(0,p.shopRefreshLeft);
+        });
+        Check("each new round replaces offers without charging a refresh fee", () =>
+        {
+            var g=Two();var p=g.State.players[0];string[] offers=p.market.Select(o=>o.id).ToArray();
+            Battle(g);Timeout(g);int gold=p.gold;Advance(g,ArenaGame.ResultsSeconds+.1f);
+            Equal("recruit",g.State.phase);Equal(4,p.market.Count);Assert(p.market.All(o=>!offers.Contains(o.id)));Equal(gold,p.gold);Near(0,p.shopRefreshLeft);
+        });
+        Check("real kills pay immediately and settlement pays only base and rank while itemizing the full round", () =>
+        {
+            var g=Fight("skeleton","cow",2);var a=g.State.players[0];var b=g.State.players[1];
+            var attacker=g.State.fighters.First(f=>f.ownerId=="a");var targets=g.State.fighters.Where(f=>f.ownerId=="b").ToArray();
+            int goldA=a.gold,goldB=b.gold;targets[0].hp=1;g.Tick(.05f);attacker.attackCooldown=1000;
+            Equal("battle",g.State.phase);Assert(targets[0].dead);Equal(goldA+1,a.gold);Equal(1,a.roundKills);Equal(goldA+1,g.SnapshotFor("a").players[0].gold);
+            Advance(g,.2f);Equal(goldA+1,a.gold);
+            targets[1].hp=1;attacker.attackCooldown=0;g.Tick(.05f);
+            Equal("results",g.State.phase);Equal(2,a.roundKills);Equal(2,a.killIncome);Equal(12,a.lastIncome);Equal(9,b.lastIncome);
+            Equal(goldA+12,a.gold);Equal(goldB+9,b.gold);
+            var result=g.State.placements.First(p=>p.playerId==a.id);Equal(2,result.kills);Equal(6,result.baseIncome);Equal(4,result.rankIncome);Equal(2,result.killIncome);Equal(12,result.income);
+            Advance(g,1);Equal(goldA+12,a.gold);Equal(goldB+9,b.gold);
         });
         Check("splitting and summoned creatures do not multiply kill income", () =>
         {
             var g=Fight("golem","slime");var attacker=g.State.fighters.First(f=>f.ownerId=="a");attacker.attack=10000;
+            var reserve=ArenaGame.PreviewFighter(g.State.players[1],new UnitState{id="slime-reserve",kind="cow",x=300,y=300});reserve.attackCooldown=1000;reserve.speed=0;g.State.fighters.Add(reserve);
+            int gold=g.State.players[0].gold;
             g.State.fighters.First(f=>f.kind=="slime").hp=1;g.Tick(.05f);Equal(1,g.State.players[0].roundKills);
-            attacker.attackCooldown=0;foreach(var f in g.State.fighters.Where(f=>!f.dead&&f.ownerId=="b")){f.hp=1;f.x=20;f.y=0;}
+            Equal("battle",g.State.phase);Equal(gold+1,g.State.players[0].gold);
+            attacker.attackCooldown=0;foreach(var f in g.State.fighters.Where(f=>!f.dead&&f.kind=="slime")){f.hp=1;f.x=20;f.y=0;}
             g.Tick(.05f);Equal(1,g.State.players[0].roundKills);Equal(1,g.State.players[0].totalKills);
+            Equal(gold+1,g.State.players[0].gold);
+        });
+        Check("summoned attackers credit their owner immediately when killing an original enemy", () =>
+        {
+            var g=Fight("evoker","cow",2);var caster=g.State.fighters.First(f=>f.ownerId=="a");
+            g.Tick(.05f);caster.attackCooldown=1000;
+            var vexes=g.State.fighters.Where(f=>f.kind=="vex").ToArray();Equal(2,vexes.Length);
+            foreach(var f in g.State.fighters){f.speed=0;f.attackCooldown=1000;}
+            var victim=g.State.fighters.First(f=>f.ownerId=="b");victim.hp=1;vexes[0].x=victim.x-10;vexes[0].y=victim.y;vexes[0].attackCooldown=0;
+            int gold=g.State.players[0].gold;g.Tick(.05f);
+            Assert(victim.dead);Equal("battle",g.State.phase);Equal(1,g.State.players[0].roundKills);Equal(gold+1,g.State.players[0].gold);
         });
         Check("private markets, equipment and skill collections are isolated in snapshots", () =>
         {

@@ -83,14 +83,17 @@ internal static partial class Program
                 var target = game.State.fighters.First(f => f.ownerId == "b");
                 var reserve = ArenaGame.PreviewFighter(owner, new UnitState { id = "ability-reserve", kind = "cow", x = -350, y = 350 });
                 reserve.speed = 0; reserve.attackCooldown = 1000; game.State.fighters.Add(reserve);
+                var enemyReserve = ArenaGame.PreviewFighter(game.State.players[1], new UnitState { id = "ability-enemy-reserve", kind = "cow", x = 350, y = 350 });
+                enemyReserve.speed = 0; enemyReserve.attackCooldown = 1000; game.State.fighters.Add(enemyReserve);
                 target.armor = 0; target.hp = target.maxHp = 1000; caster.attackCooldown = 0;
                 game.Tick(.05f); caster.attackCooldown = 1000; caster.hp = 1;
                 target.attack = 100; target.attackCooldown = 0; game.Tick(.05f); target.attackCooldown = 1000;
                 Assert(caster.dead); Equal("battle", game.State.phase); Equal(1, game.State.players[1].roundKills);
                 Assert(ReferenceEquals(caster, kind == "cave_spider" ? target.poisonSource : target.burnSource));
-                target.hp = .1f; Advance(game, .65f);
+                int gold = owner.gold; target.hp = .1f; Advance(game, .65f);
                 Assert(target.dead, kind + " stopped dealing damage after caster death");
                 Equal("a", target.lastAttackerId); Equal(1, owner.roundKills); Equal(1, owner.totalKills);
+                Equal("battle", game.State.phase); Equal(gold + 1, owner.gold); Equal(gold + 1, game.SnapshotFor(owner.id).players[0].gold);
             }
         });
 

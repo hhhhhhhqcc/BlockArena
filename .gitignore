@@ -10,3 +10,5 @@
 !Tools/**/*.csproj
 /Tools/**/bin/
 /Tools/**/obj/
+/.checks/
+/*.log

@@ -73,6 +73,26 @@ namespace BlockArena.Presentation
                 for(int s=0;s<7;s++)if((m&(1<<s))!=0)b.Box(p[s],s==0||s==3||s==6?new Vector3(.18f,.035f,.025f):new Vector3(.035f,.13f,.025f),c);
             }
         });}
+        public static Mesh CommanderDamageNumber(int amount){int n=Mathf.Clamp(amount,1,20);return Cached("commander-damage-"+n,b=>{
+            Color red=Hex("#F88C91"),light=Hex("#FFF0CF");string text=n.ToString();float start=.05f;
+            string[] heart={"01010","11111","11111","01110","00100"};
+            for(int y=0;y<heart.Length;y++)for(int x=0;x<heart[y].Length;x++)if(heart[y][x]=='1')
+                b.Box(new Vector3(-.47f+x*.055f,.3f-y*.055f,0),new Vector3(.052f,.052f,.035f),red);
+            b.Box(new Vector3(-.12f,.16f,0),new Vector3(.13f,.04f,.03f),red);
+            int[] masks={0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f};
+            for(int d=0;d<text.Length;d++){
+                float x=start+d*.25f;int m=masks[text[d]-'0'];
+                Vector3[] p={new Vector3(x,.32f,0),new Vector3(x+.09f,.23f,0),new Vector3(x+.09f,.07f,0),new Vector3(x,0,0),new Vector3(x-.09f,.07f,0),new Vector3(x-.09f,.23f,0),new Vector3(x,.16f,0)};
+                for(int s=0;s<7;s++)if((m&(1<<s))!=0)b.Box(p[s],s==0||s==3||s==6?new Vector3(.18f,.035f,.03f):new Vector3(.035f,.13f,.03f),light);
+            }
+        });}
+        public static Mesh ImpactTint(Mesh source)
+        {
+            string key="commander-flash/"+source.name;Mesh mesh;if(meshes.TryGetValue(key,out mesh))return mesh;
+            mesh=UnityEngine.Object.Instantiate(source);mesh.name=key;Color[] colors=mesh.colors;
+            for(int i=0;i<colors.Length;i++)colors[i]=Color.Lerp(colors[i],Hex("#FF696F"),.78f);
+            mesh.colors=colors;meshes.Add(key,mesh);return mesh;
+        }
     }
 
     public sealed partial class VoxelCreature : MonoBehaviour
@@ -80,7 +100,7 @@ namespace BlockArena.Presentation
         public string UnitId, Kind;
         public Vector3 Target;
         public float Health = 1, MaximumHealth = 1, Attack, Size = 1;
-        public bool Battle, Dead, Seen;
+        public bool Battle, Dead, Seen, LocalCommander;
         public int Slot;
         public float Height = 1.8f;
 
@@ -95,6 +115,10 @@ namespace BlockArena.Presentation
         float seed, deathProgress, movementBlend;
         int healthColor = -1;
         bool hovered;
+        bool wasDragging,flashVisible;
+        float selectionAmount,selectionVelocity,dragAmount,dragVelocity,landingAge=10,impactAge=10,impactStrength=1;
+        MeshFilter[] commanderParts;
+        Mesh[] commanderNormalMeshes,commanderFlashMeshes;
 
         public bool HealthBarVisible { get { return healthRoot != null && healthRoot.gameObject.activeInHierarchy; } }
 
@@ -113,6 +137,11 @@ namespace BlockArena.Presentation
             figure = new GameObject("Articulated model").transform;
             figure.SetParent(transform, false);
             BuildBody();
+            if(Kind=="steve"){
+                commanderParts=figure.GetComponentsInChildren<MeshFilter>();
+                commanderNormalMeshes=new Mesh[commanderParts.Length];commanderFlashMeshes=new Mesh[commanderParts.Length];
+                for(int i=0;i<commanderParts.Length;i++){commanderNormalMeshes[i]=commanderParts[i].sharedMesh;commanderFlashMeshes[i]=VoxelAssets.ImpactTint(commanderNormalMeshes[i]);}
+            }
             if (head != null) headRestPosition = head.localPosition;
             for (int i = 0; i < legs.Count; i++) legRestPositions.Add(legs[i].localPosition);
 
@@ -522,6 +551,8 @@ namespace BlockArena.Presentation
             figure.rotation = facing;
             Dead = false; deathProgress = 0; Attack = 0; movementBlend = 0; Seen = true;
             hovered = false; healthColor = -1;
+            LocalCommander=false;wasDragging=false;selectionAmount=selectionVelocity=dragAmount=dragVelocity=0;landingAge=impactAge=10;
+            SetCommanderFlash(false);
             teamRingMesh.sharedMesh = VoxelAssets.TeamRing(slot);
             healthRoot.gameObject.SetActive(false);
             selection.gameObject.SetActive(false);
@@ -531,12 +562,39 @@ namespace BlockArena.Presentation
         void OnDisable()
         {
             hovered = false;
+            SetCommanderFlash(false);
             if (healthRoot != null) healthRoot.gameObject.SetActive(false);
+        }
+
+        public void PlayDefeatImpact(float strength=1)
+        {
+            if(Kind=="steve"){impactAge=0;impactStrength=.65f+Mathf.Clamp01(strength)*.6f;}
+        }
+        public void CancelDefeatImpact()
+        {
+            impactAge=10;SetCommanderFlash(false);
+        }
+        void SetCommanderFlash(bool visible)
+        {
+            if(flashVisible==visible||commanderParts==null)return;flashVisible=visible;
+            for(int i=0;i<commanderParts.Length;i++)commanderParts[i].sharedMesh=visible?commanderFlashMeshes[i]:commanderNormalMeshes[i];
+        }
+        static void Spring(ref float value,ref float velocity,float target,float frequency,float damping,float dt)
+        {
+            // Small substeps keep this underdamped spring stable during a slow rendered frame.
+            int steps=Mathf.Max(1,Mathf.CeilToInt(dt/.016f));float step=dt/steps;
+            for(int i=0;i<steps;i++){velocity+=((target-value)*frequency*frequency-2*damping*frequency*velocity)*step;value+=velocity*step;}
         }
 
         public void Step(float dt, float time, Camera camera, bool selected, Vector3? drag)
         {
-            dt = Mathf.Max(dt, .0001f);
+            dt = Mathf.Max(dt, 0);
+            bool dragging=drag.HasValue&&!Battle&&Kind!="steve"&&!Dead;
+            if(wasDragging&&!dragging)landingAge=0;
+            wasDragging=dragging;landingAge=Mathf.Min(10,landingAge+dt);impactAge=Mathf.Min(10,impactAge+dt);
+            Spring(ref dragAmount,ref dragVelocity,dragging?1:0,18,.64f,dt);
+            bool focused=!Dead&&(selected||hovered||(Kind=="steve"&&LocalCommander));
+            Spring(ref selectionAmount,ref selectionVelocity,focused?1:0,20,.58f,dt);
             Vector3 aim = drag.HasValue ? drag.Value : Target;
             Vector3 delta = aim - transform.position;
             float desiredMovement = Mathf.Clamp01(delta.magnitude * 11);
@@ -604,7 +662,31 @@ namespace BlockArena.Presentation
                 head.localPosition = headRestPosition + Vector3.up * (idle * Mathf.Sin(time * 3.2f + seed + .4f) * .01f);
             }
             AnimateBestiary(time, idle, strike, walk);
-            selection.gameObject.SetActive(!Dead && (selected || (Battle && hovered)));
+            if(!Dead){
+                float settle=landingAge<.7f?Mathf.Exp(-landingAge*7)*Mathf.Cos(landingAge*20):0;
+                float stretch=dragAmount*.065f-settle*.16f;
+                figure.localScale=Vector3.Scale(figure.localScale,new Vector3(1-stretch*.45f,1+stretch,1-stretch*.45f));
+                figure.localPosition+=Vector3.up*(dragAmount*.23f+Mathf.Max(0,Mathf.Sin(landingAge*20))*Mathf.Exp(-landingAge*7)*.11f);
+            }
+            if(Kind=="steve"&&impactAge<1.3f){
+                float jump=Mathf.Sin(Mathf.Clamp01((impactAge-.055f)/.66f)*Mathf.PI)*impactStrength;
+                float press=Mathf.Max(0,1-impactAge/.13f)*impactStrength,settle=impactAge>.65f?Mathf.Exp(-(impactAge-.65f)*8)*Mathf.Sin((impactAge-.65f)*23)*impactStrength:0;
+                float stretch=jump*.19f-press*.24f-settle*.1f;
+                Vector3 outward=new Vector3(Target.x,0,Target.z).normalized;
+                figure.localPosition+=Vector3.up*(jump*.72f)+outward*(jump*.36f);
+                figure.localScale=Vector3.Scale(figure.localScale,new Vector3(1-stretch*.52f,1+stretch,1-stretch*.52f));
+                figure.rotation*=Quaternion.Euler(jump*-24,0,Mathf.Sin(impactAge*24)*Mathf.Exp(-impactAge*4)*12);
+                for(int i=0;i<arms.Count;i++)arms[i].localRotation*=Quaternion.Euler(-jump*72,0,(i==0?-1:1)*jump*32);
+                if(head!=null)head.localRotation*=Quaternion.Euler(-jump*15,0,0);
+            }
+            SetCommanderFlash(Kind=="steve"&&impactAge<.34f&&(impactAge<.13f||impactAge>.22f));
+            float footprint=Mathf.Clamp(modelFootprint/.57f,.6f,2.8f);
+            float ringSize=footprint*(.82f+Mathf.Clamp(selectionAmount,0,1.3f)*.2f+dragAmount*.13f);
+            selection.localScale=new Vector3(ringSize,1,ringSize);
+            selection.localPosition=new Vector3(0,.04f+dragAmount*.012f,0);
+            selection.gameObject.SetActive(!Dead&&selectionAmount>.02f);
+            float teamSize=footprint*(Kind=="steve"&&LocalCommander?1.2f:1);
+            teamRing.localScale=new Vector3(teamSize,1,teamSize);
             teamRing.gameObject.SetActive(!Dead);
             bool showHealth = Battle && hovered && !Dead && Kind != "steve";
             healthRoot.gameObject.SetActive(showHealth);
