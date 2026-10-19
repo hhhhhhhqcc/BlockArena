@@ -5,23 +5,12 @@ namespace BlockArena.Core
 {
     public static class TradeCatalog
     {
-        public const int RefreshPrice = 2, EquipmentSlots = 3;
+        public const int RefreshPrice = 2, MarketSlots = 4;
         static readonly Dictionary<string, TradeDefinition> items = new Dictionary<string, TradeDefinition>();
         public static readonly string[] Ids;
 
         static TradeCatalog()
         {
-            Equipment("iron_sword", "铁剑", "攻击 +4", "attack", 5, attack:4);
-            Equipment("diamond_sword", "钻石剑", "攻击 +10", "attack", 13, attack:10);
-            Equipment("netherite_blade", "下界合金刃", "攻击 +16，攻速 +10%", "attack", 22, attack:16, attackSpeed:.1f);
-            Equipment("chainmail", "锁链甲", "生命 +22，减伤 +8%", "armor", 6, hp:22, armor:.08f);
-            Equipment("diamond_armor", "钻石护甲", "生命 +48，减伤 +18%", "armor", 14, hp:48, armor:.18f);
-            Equipment("totem", "守护图腾", "生命 +75，减伤 +12%", "heart", 20, hp:75, armor:.12f);
-            Equipment("swift_boots", "迅捷之靴", "移速 +30%，攻速 +12%", "speed", 7, speed:.3f, attackSpeed:.12f);
-            Equipment("quick_crossbow", "连弩机括", "攻速 +35%，射程 +20", "bow", 10, attackSpeed:.35f, range:20);
-            Equipment("healing_apple", "附魔金苹果", "生命 +45，攻击 +3", "heart", 9, hp:45, attack:3);
-            Equipment("spyglass", "狙击镜", "射程 +55，攻击 +3", "range", 8, attack:3, range:55);
-            Equipment("soul_lantern", "灵魂灯", "生命 +18，攻速 +20%", "book", 8, hp:18, attackSpeed:.2f);
             Skill("undead_legion", "亡灵军势", "全部亡灵生命 +25、攻击 +4；持续影响以后招募的亡灵。", "undead", 12, hp:25, attack:4);
             Skill("aerial_hunt", "高空猎手", "全部飞行生物攻速 +25%、移速 +20%。", "flying", 12, attackSpeed:.25f, speed:.2f);
             Skill("beast_pack", "兽群协同", "全部野兽生命 +18、攻速 +20%。", "beast", 10, hp:18, attackSpeed:.2f);
@@ -44,8 +33,6 @@ namespace BlockArena.Core
             Grant("zombie_resilience", "thorns", " 额外获得荆棘反伤。");
             Ids = new List<string>(items.Keys).ToArray();
         }
-        static void Equipment(string id,string name,string description,string icon,int price,float hp=0,float attack=0,float attackSpeed=0,float range=0,float speed=0,float armor=0)
-        { Add(id,name,description,"equipment",icon,"all",price,hp,attack,attackSpeed,range,speed,armor); }
         static void Skill(string id,string name,string description,string target,int price,float hp=0,float attack=0,float attackSpeed=0,float range=0,float speed=0,float armor=0)
         { Add(id,name,description,"skill","book",target,price,hp,attack,attackSpeed,range,speed,armor); }
         static void Add(string id,string name,string description,string type,string icon,string target,int price,float hp,float attack,float attackSpeed,float range,float speed,float armor)
@@ -53,6 +40,12 @@ namespace BlockArena.Core
         static void Grant(string id,string skill,string description) { items[id].grantedSkill=skill;items[id].description+=description; }
         public static TradeDefinition Get(string id)
         { TradeDefinition item;if(id==null||!items.TryGetValue(id,out item))throw new InvalidOperationException("未知商店商品");return item; }
+        public static string[] AvailableSkills(PlayerState player)
+        {
+            var available = new List<string>();
+            foreach (string id in Ids) if (player == null || !player.upgrades.Contains(id)) available.Add(id);
+            return available.ToArray();
+        }
         public static bool Applies(TradeDefinition item,CreatureDefinition creature)
         {
             if(item.target=="all"||item.target==creature.id)return true;

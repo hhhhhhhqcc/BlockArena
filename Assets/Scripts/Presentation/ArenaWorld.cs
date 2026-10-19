@@ -38,7 +38,7 @@ namespace BlockArena.Presentation
         public Action<string,Vector3,float> SoundCue;
         public VoxelCreature HoveredCreature { get { return hovered; } }
         sealed class FlyingEffect { public Transform transform;public MeshFilter filter;public Vector3 start,end;public float age,duration,size=1,nextTrail,bornAt;public bool number,soul;public string targetKey; }
-        sealed class CommanderImpact { public string key;public int damage;public float chargeAt,launchAt,hitAt;public bool charged,launched,struck; }
+        sealed class CommanderImpact { public string key;public int damage,slot;public float chargeAt,launchAt,hitAt;public CommanderRitualTimeline.Shot timing;public bool charged,launched,struck,lethal,shattered; }
         internal int CommanderHitCount { get { return commanderHitCount; } }
         internal bool HasCommanderHitAnimation { get { return RitualActive||commanderImpacts.Count>0; } }
 
@@ -158,6 +158,12 @@ namespace BlockArena.Presentation
             if(battle){for(int i=0;i<next.fighters.Count;i++){FighterState f=next.fighters[i];VoxelCreature v=Get("fighter:"+f.id,f.kind,f.slot,Position(f.x,f.y));v.UnitId=f.unitId;v.Battle=true;v.Health=f.hp;v.MaximumHealth=f.maxHp;v.Attack=f.attackTime;v.Size=Mathf.Max(.3f,f.scale)*CreatureSize*CreatureCatalog.Get(f.kind).visualScale;v.Dead=f.dead;v.Seen=true;fighterViews[v]=f;}}
             stale.Clear();foreach(KeyValuePair<string,VoxelCreature> item in creatures)if(!item.Value.Seen)stale.Add(item.Key);for(int i=0;i<stale.Count;i++)Release(stale[i]);
             ObserveCommanderHealth(next,viewerId);
+            for(int i=0;i<next.players.Count;i++){
+                PlayerState p=next.players[i];VoxelCreature commander;
+                if(creatures.TryGetValue("steve:"+p.id,out commander))commander.SetCommanderEliminated(p.hp==0,CommanderImpactPending(p.id));
+            }
+            skillStateRevision++;
+            SyncArenaEventPresentation(next,viewerId);
             if(next.effects!=null)for(int i=0;i<next.effects.Count;i++)ProcessEffect(next.effects[i]);
         }
         void ObserveCommanderHealth(GameState next,string viewerId)
@@ -188,7 +194,7 @@ namespace BlockArena.Presentation
         }
         void Release(string key){VoxelCreature v;if(!creatures.TryGetValue(key,out v))return;if(hovered==v)SetHovered(null);creatures.Remove(key);fighterViews.Remove(v);v.gameObject.SetActive(false);pools[v.Kind].Push(v);}
         void ReleaseAll(){SetHovered(null);foreach(VoxelCreature v in creatures.Values){v.gameObject.SetActive(false);pools[v.Kind].Push(v);}creatures.Clear();fighterViews.Clear();}
-        public void Clear(){if(!initialized)return;ReleaseAll();ClearEffects();observedPlayerHealth.Clear();hitRounds.Clear();observedRound=-1;observedViewer=observedPhase=null;commanderHitCount=0;state=null;selectedId=dragId=null;dragPosition=null;solo=false;localSlot=0;battleScenery.gameObject.SetActive(true);for(int i=0;i<4;i++)preparations[i].gameObject.SetActive(true);BuildDemo();}
+        public void Clear(){if(!initialized)return;ReleaseAll();ClearEffects();ClearSkillHighlight();ResetArenaEventPresentation();observedPlayerHealth.Clear();hitRounds.Clear();observedRound=-1;observedViewer=observedPhase=null;commanderHitCount=0;state=null;selectedId=dragId=null;dragPosition=null;solo=false;localSlot=0;battleScenery.gameObject.SetActive(true);for(int i=0;i<4;i++)preparations[i].gameObject.SetActive(true);BuildDemo();}
         public bool TryPickUnit(Vector2 screen,out string unitId)
         {
             unitId=null;if(viewCamera==null||state==null)return false;Ray ray=viewCamera.ScreenPointToRay(screen);int count=Physics.RaycastNonAlloc(ray,pickHits,180,1<<8);float nearest=float.MaxValue;
@@ -253,6 +259,7 @@ namespace BlockArena.Presentation
                 }
                 v.Step(dt,time,viewCamera,v.UnitId==selectedId,drag);
             }
+            UpdateArenaEventPresentation(time);
             for(int i=movingEffects.Count-1;i>=0;i--){FlyingEffect effect=movingEffects[i];effect.age=effect.soul?Mathf.Max(0,time-effect.bornAt):effect.age+dt;float t=effect.age/effect.duration;if(t>=1){effect.transform.gameObject.SetActive(false);effectPool.Push(effect);movingEffects.RemoveAt(i);continue;}
                 if(effect.number){effect.transform.position=effect.start+Vector3.up*(t*1.25f);effect.transform.rotation=viewCamera.transform.rotation;effect.transform.localScale=Vector3.one*effect.size*(1+Mathf.Sin(t*Mathf.PI)*.15f)*Mathf.Min(1,(1-t)*6);}
                 else{
@@ -272,17 +279,21 @@ namespace BlockArena.Presentation
             Quaternion desiredYaw=Quaternion.Euler(0,-90*localSlot,0);
             if(firstCamera||immediate){cameraFocus=desiredFocus;cameraSize=desiredSize;cameraYaw=desiredYaw;firstCamera=false;}
             else if(dt>0){cameraFocus=Vector3.SmoothDamp(cameraFocus,desiredFocus,ref focusVelocity,.34f,120,dt);cameraSize=Mathf.SmoothDamp(cameraSize,desiredSize,ref sizeVelocity,.34f,100,dt);cameraYaw=Quaternion.Slerp(cameraYaw,desiredYaw,1-Mathf.Exp(-dt*5));}
-            viewCamera.orthographicSize=cameraSize;Vector3 offset=cameraYaw*new Vector3(0,31,35);viewCamera.transform.position=cameraFocus+offset;viewCamera.transform.rotation=Quaternion.LookRotation(cameraFocus-viewCamera.transform.position,Vector3.up);
+            // Blend over the settled arena view so a cinematic can return fully wide before the next shot.
+            Vector3 renderedFocus=cameraFocus;float renderedSize=cameraSize;
+            ApplyExecutionCamera(ref renderedFocus,ref renderedSize,aspect);
+            viewCamera.orthographicSize=renderedSize;Vector3 offset=cameraYaw*new Vector3(0,31,35);viewCamera.transform.position=renderedFocus+offset;viewCamera.transform.rotation=Quaternion.LookRotation(renderedFocus-viewCamera.transform.position,Vector3.up);
             ApplyCameraShake();
         }
         void ProcessEffect(EffectState effect)
         {
             if(effect==null||string.IsNullOrEmpty(effect.id)||effect.age>.65f||seenEffects.ContainsKey(effect.id))return;seenEffects[effect.id]=Time.unscaledTime;
+            if(effect.type=="event_spawn"||effect.type=="event_claim")return;
             Vector3 at=Position(effect.x,effect.y)+Vector3.up*.6f;
             if(SoundCue!=null)SoundCue("combat_"+effect.type,at,Mathf.Clamp01(.2f+effect.value/50f));
             if(effect.type=="arrow"){FlyingEffect flying=EffectObject();flying.start=at+Vector3.up*.3f;flying.end=Position(effect.targetX,effect.targetY)+Vector3.up*.65f;flying.duration=.19f;flying.number=false;flying.filter.sharedMesh=VoxelAssets.Cached("arrow",b=>{b.Box(Vector3.zero,new Vector3(.045f,.045f,.65f),VoxelAssets.Hex("#DCC797"));b.Box(new Vector3(0,0,.34f),new Vector3(.12f,.1f,.13f),VoxelAssets.Hex("#B8C7C5"));});flying.transform.localScale=Vector3.one;return;}
             int count=effect.type=="explode"?34:effect.type=="death"?14:effect.type=="heal"?6:5;
-            Color color=effect.type=="explode"?VoxelAssets.Hex("#F7BF72"):effect.type=="heal"?VoxelAssets.Hex("#A3E7A3"):effect.type=="death"?Teams[Mathf.Clamp(effect.slot,0,3)]:VoxelAssets.Hex("#E8D8AB");
+            Color color=effect.type=="explode"?VoxelAssets.Hex("#F7BF72"):effect.type=="heal"?VoxelAssets.Hex("#A3E7A3"):effect.type=="death"?(effect.slot<0?VoxelAssets.Hex("#F4C366"):Teams[Mathf.Clamp(effect.slot,0,3)]):VoxelAssets.Hex("#E8D8AB");
             for(int i=0;i<count;i++){ParticleSystem.EmitParams emit=new ParticleSystem.EmitParams();emit.position=at;Vector3 velocity=UnityEngine.Random.insideUnitSphere*(effect.type=="explode"?5:2);velocity.y=Mathf.Abs(velocity.y)+1;emit.velocity=velocity;emit.startColor=color;emit.startSize=effect.type=="explode"? 0.19f: 0.1f;emit.startLifetime=effect.type=="explode"? 0.65f: 0.35f;sparks.Emit(emit,1);}
             if(effect.type=="hit"&&effect.value>0){FlyingEffect number=EffectObject();number.start=at+Vector3.up*.6f;number.end=number.start;number.duration=.72f;number.number=true;number.filter.sharedMesh=VoxelAssets.DamageNumber(Mathf.RoundToInt(effect.value));number.transform.rotation=viewCamera.transform.rotation;number.transform.localScale=Vector3.one;}
         }

@@ -22,7 +22,8 @@ namespace BlockArena.Core
     [Serializable]
     public sealed class GameState
     {
-        public string hostId, phase = "lobby", winnerId, message;
+        public string hostId, phase = "lobby", winnerId, message, leaderId;
+        public ArenaEventState roundEvent;
         public int round;
         public float timeLeft;
         public List<PlayerState> players = new List<PlayerState>();
@@ -37,6 +38,8 @@ namespace BlockArena.Core
         public string id, name;
         public int slot, hp = 20;
         public int gold, roundKills, totalKills, lastIncome, killIncome, rankIncome, baseIncome, lastRank;
+        public int bountyKills, bountyIncome, eventIncome;
+        public string recruitOfferId;
         public float shopRefreshLeft;
         public bool ready, bot, connected = true, eliminated, recruitPending;
         public string[] shop = new string[0];
@@ -52,6 +55,7 @@ namespace BlockArena.Core
     public sealed class UnitState
     {
         public string id, kind, placementId;
+        public int paidPrice;
         public float x, y;
         public List<string> equipment = new List<string>();
     }
@@ -65,7 +69,7 @@ namespace BlockArena.Core
         public float attack, attackSpeed, range, speed;
         public string[] skills = new string[0], equipment = new string[0];
         public float armor, shield, poisonTime, burnTime, slowTime, stunTime;
-        public bool summoned;
+        public bool summoned, neutral;
         public bool dead;
         internal float attackCooldown, radius, think, side;
         internal bool mini;
@@ -91,6 +95,16 @@ namespace BlockArena.Core
     {
         public string playerId;
         public int rank, damage, kills, income, baseIncome, killIncome, rankIncome;
+        public int bountyKills, bountyIncome, eventIncome;
+    }
+
+    [Serializable]
+    public sealed class ArenaEventState
+    {
+        public string id, kind = "none", claimedBy, fighterId, targetPlayerId;
+        public int round, reward;
+        public bool active;
+        public float x, y;
     }
 
     [Serializable]

@@ -151,7 +151,7 @@ namespace BlockArena.Runtime
 
         public bool PointerCaptured
         {
-            get { Metrics(); UpdateMarketPointer(); return marketPointerOwned || marketDragging || releasedPointerFrame == Time.frameCount || audioPointerOwned || audioReleasedFrame == Time.frameCount; }
+            get { Metrics(); UpdateMarketPointer(); return marketPointerOwned || marketDragging || releasedPointerFrame == Time.frameCount || audioPointerOwned || audioReleasedFrame == Time.frameCount || skillPointerOwned || skillReleasedFrame == Time.frameCount; }
         }
         internal int CoinFeedbackCount { get { return feedbackCount; } }
         internal int ActiveCoinFeedbackCount
@@ -185,6 +185,7 @@ namespace BlockArena.Runtime
         void UpdateMarketPointer()
         {
             UpdateAudioPointer();
+            UpdateSkillPointer();
             if (pointerFrame == Time.frameCount) return;
             if (app.VerificationInput) return;
             ProcessMarketPointer(Input.mousePosition, Input.GetMouseButtonDown(0), Input.GetMouseButton(0), Input.GetMouseButtonUp(0));
@@ -193,7 +194,7 @@ namespace BlockArena.Runtime
         {
             Metrics(); pointerFrame = Time.frameCount; EnsureMarketPosition();
             Vector2 p = new Vector2(screen.x / scale, (Screen.height - screen.y) / scale);
-            if (audioPointerOwned || (pressed && AudioCovers(p))) return;
+            if (audioPointerOwned || skillPointerOwned || (pressed && (AudioCovers(p) || SkillUiCovers(p)))) return;
             if (!MarketVisible || ModalOpen) {
                 if (marketPointerOwned || marketDragging) releasedPointerFrame = Time.frameCount;
                 marketPointerOwned = marketDragging = false;
@@ -255,10 +256,14 @@ namespace BlockArena.Runtime
                 (oldState.phase == "lobby" && nextState.round <= 1) ||
                 (oldState.phase == "finished" && nextState.phase != "finished");
             if (baseline) {
+                ResetRoster();
                 playerVisuals.Clear(); feedbackCount = 0;
                 marketPointerOwned = marketDragging = false;
+                CloseSkillDetails(); ShowOwnedSkills = false; skillPointerOwned = false; ownedSkillScroll = Vector2.zero; skillCountsFrame = -1;
             }
+            ObserveEconomy(oldState,nextState,baseline);
             lastObservedState = nextState;
+            skillCountsFrame = -1;
             if (nextState == null) { finishedAt = -10; return; }
             float now = Time.unscaledTime;
             if (nextState.phase == "finished" && (oldState == null || oldState.phase != "finished")) finishedAt = now;

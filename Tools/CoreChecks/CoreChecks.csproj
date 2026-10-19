@@ -12,5 +12,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="EconomyChecks.cs" />
     <Compile Include="AbilityChecks.cs" />
+    <Compile Include="RitualChecks.cs" />
+    <Compile Include="AntiSnowballChecks.cs" />
   </ItemGroup>
 </Project>

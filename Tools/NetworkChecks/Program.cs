@@ -61,18 +61,19 @@ sealed class NetworkCheck : IDisposable
 
     public void Run()
     {
-        Require(WireProtocol.Version == 3, "Economy and equipment require protocol v3.");
+        Require(WireProtocol.Version == 4, "Bounties, events and revisioned recruitment require protocol v4.");
+        if (server != null) CheckFreshRooms();
         using (var legacy = OpenRaw())
         {
-            byte[] payload = Encoding.UTF8.GetBytes(rawCodec.Encode(new WirePacket { type = "hello", protocol = 1, name = "旧版客户端" }));
+            byte[] payload = Encoding.UTF8.GetBytes(rawCodec.Encode(new WirePacket { type = "hello", protocol = 3, name = "旧版客户端" }));
             byte[] header = Header(payload.Length);
             legacy.GetStream().Write(header, 0, header.Length); legacy.GetStream().Write(payload, 0, payload.Length);
             WirePacket response = ReadRawPacket(legacy);
-            Require(response.type == "error" && response.message.Contains("协议版本不一致") && response.protocol == 3,
-                "A v1 client was not explicitly rejected before handshake.");
+            Require(response.type == "error" && response.message.Contains("协议版本不一致") && response.protocol == 4,
+                "A v3 client was not explicitly rejected before handshake.");
             Require(string.IsNullOrEmpty(response.placementId), "A handshake error carried a placement ID.");
         }
-        Pass("protocol v1 explicitly rejected before joining the v3 game");
+        Pass("protocol v3 explicitly rejected before joining the v4 game");
 
         for (int i = 0; i < 4; i++)
         {
@@ -101,38 +102,129 @@ sealed class NetworkCheck : IDisposable
         for (int i = 0; i < 4; i++)
         {
             Require(Own(clients[i]).shop != null && Own(clients[i]).shop.Length == 3, "Own recruit choices missing.");
+            Require(!string.IsNullOrEmpty(Own(clients[i]).recruitOfferId), "Own recruit revision missing.");
+            Require(Own(clients[i]).units.All(u => u.paidPrice == 0), "Starter creatures incorrectly carry a refundable price.");
+            Require(Own(clients[i]).market.Count == TradeCatalog.MarketSlots && Own(clients[i]).market.All(o => o.kind == "skill"),
+                "A new market must contain only permanent skills.");
+            Require(Own(clients[i]).market.Select(o => o.itemId).Distinct().Count() == Own(clients[i]).market.Count,
+                "A new market contains duplicate skills.");
             foreach (var other in clients[i].State.players.Where(p => p.id != clients[i].PlayerId))
-                Require((other.shop == null || other.shop.Length == 0) && other.market.Count == 0, "Another player's shop leaked.");
+                Require((other.shop == null || other.shop.Length == 0) && other.market.Count == 0 && string.IsNullOrEmpty(other.recruitOfferId), "Another player's shop or recruit revision leaked.");
+            Require(clients[i].State.roundEvent != null && clients[i].State.roundEvent.round == clients[i].State.round &&
+                new[] { "none", "boss", "gold" }.Contains(clients[i].State.roundEvent.kind), "Round event announcement missing or invalid in personalized snapshot.");
+            Require(string.IsNullOrEmpty(clients[i].State.leaderId) || clients[i].State.players.Any(p => p.id == clients[i].State.leaderId), "Leader refers to an unknown player.");
             string snapshot = rawCodec.Encode(new WirePacket { type = "state", state = clients[i].State });
             foreach (var player in clients) Require(!snapshot.Contains(player.ResumeToken), "Resume token leaked in a snapshot.");
         }
         Pass("private choices and tokens excluded from shared snapshots");
 
+        var refreshClient = clients[1];
+        string oldRecruit = Own(refreshClient).recruitOfferId;
+        string oldCandidates = string.Join(",", Own(refreshClient).shop.OrderBy(k => k));
+        int refreshBalance = Own(refreshClient).gold;
+        refreshClient.Send(new GameCommand { type = "recruit_refresh", offerId = oldRecruit });
+        Wait(() => Own(refreshClient).recruitOfferId != oldRecruit, 4000, "revisioned recruit refresh");
+        Require(Own(refreshClient).gold == refreshBalance - 2 && Own(refreshClient).recruitPending &&
+            string.Join(",", Own(refreshClient).shop.OrderBy(k => k)) != oldCandidates, "Recruit refresh did not charge exactly two coins for a different candidate set.");
+        string freshRecruit = Own(refreshClient).recruitOfferId;
+        int refreshErrors = refreshClient.ErrorVersion;
+        refreshClient.Send(new GameCommand { type = "recruit_refresh", offerId = oldRecruit });
+        refreshClient.Send(new GameCommand { type = "choose", index = 0, offerId = oldRecruit });
+        Wait(() => refreshClient.ErrorVersion == refreshErrors + 2, 4000, "stale recruit refresh and choice rejected");
+        int recruitSnapshots = codecs[1].StatePackets;
+        Wait(() => codecs[1].StatePackets > recruitSnapshots, 4000, "snapshot after stale recruitment commands");
+        Require(Own(refreshClient).gold == refreshBalance - 2 && Own(refreshClient).recruitOfferId == freshRecruit && Own(refreshClient).units.Count == 2 && Own(refreshClient).recruitPending,
+            "An obsolete recruit command spent gold, changed the revision or bought a creature.");
+        Pass("TCP recruit refresh costs two coins, changes its candidate set and rejects repeated stale revisions without spending");
+
+        string starter = Own(refreshClient).units[0].id;
+        refreshClient.Send(new GameCommand { type = "dismiss", unitId = starter });
+        Wait(() => Own(refreshClient).units.Count == 1, 4000, "starter dismissal during pending recruitment");
+        Require(Own(refreshClient).gold == refreshBalance - 2 && Own(refreshClient).recruitPending,
+            "Starter dismissal generated gold or consumed the pending recruit choice.");
+        int dismissalErrors = refreshClient.ErrorVersion;
+        string finalStarter = Own(refreshClient).units[0].id;
+        string foreignStarter = Own(clients[0]).units[0].id;
+        refreshClient.Send(new GameCommand { type = "dismiss", unitId = finalStarter });
+        refreshClient.Send(new GameCommand { type = "dismiss", unitId = foreignStarter });
+        Wait(() => refreshClient.ErrorVersion == dismissalErrors + 2, 4000, "last and foreign creature dismissals rejected");
+        recruitSnapshots = codecs[1].StatePackets;
+        Wait(() => codecs[1].StatePackets > recruitSnapshots, 4000, "snapshot after rejected dismissals");
+        Require(Own(refreshClient).units.Count == 1 && Own(refreshClient).units[0].id == finalStarter && Own(refreshClient).gold == refreshBalance - 2 &&
+            Own(clients[0]).units.Any(u => u.id == foreignStarter), "Rejected dismissal removed a last or foreign creature, or generated a refund.");
+        Pass("TCP starter dismissal refunds zero, preserves recruitment and rejects the last unit and another player's unit");
+
+        var expectedGold = new int[4]; var expectedUnits = new int[4];
         clients[0].Send(new GameCommand { type = "skip" });
-        for (int i = 1; i < 4; i++) clients[i].Send(new GameCommand { type = "choose", index = i % 3 });
-        Wait(() => clients.All(c => c.State.phase == "prep" && Own(c).units.Count == (c==clients[0]?2:3)), 8000, "paid choices and saving by skipping");
+        expectedGold[0] = Own(clients[0]).gold; expectedUnits[0] = Own(clients[0]).units.Count;
+        for (int i = 1; i < 4; i++) {
+            var own = Own(clients[i]);
+            int affordable = Enumerable.Range(0, own.shop.Length).Where(n => CreatureCatalog.Get(own.shop[n]).price <= own.gold)
+                .OrderBy(n => CreatureCatalog.Get(own.shop[n]).price).DefaultIfEmpty(-1).First();
+            int price = affordable < 0 ? 0 : CreatureCatalog.Get(own.shop[affordable]).price;
+            expectedGold[i] = own.gold - price; expectedUnits[i] = own.units.Count + (affordable < 0 ? 0 : 1);
+            clients[i].Send(affordable < 0 ? new GameCommand { type = "skip" } : new GameCommand { type = "choose", index = affordable, offerId = own.recruitOfferId });
+        }
+        Wait(() => Enumerable.Range(0, 4).All(i => clients[i].State.phase == "prep" && Own(clients[i]).units.Count == expectedUnits[i]), 8000, "paid choices and saving by skipping");
         Require(clients.All(c => !Own(c).recruitPending), "Choice flags not cleared.");
-        Require(clients.All(c => Own(c).gold == (string.IsNullOrEmpty(Own(c).recruitChoice)?12:12-CreatureCatalog.Get(Own(c).recruitChoice).price)), "Recruit did not charge the server price.");
+        Require(Enumerable.Range(0, 4).All(i => Own(clients[i]).gold == expectedGold[i]), "Recruit did not charge the server price.");
+        Require(clients.Where(c => !string.IsNullOrEmpty(Own(c).recruitChoice)).All(c => Own(c).units.Single(u => u.kind == Own(c).recruitChoice && u.paidPrice > 0).paidPrice == CreatureCatalog.Get(Own(c).recruitChoice).price),
+            "Paid recruit price was not included in the authoritative army snapshot.");
         Pass("paid recruitment and saving by skipping synchronize authoritative gold");
 
+        var refundClient = clients[2];
+        var paidUnit = Own(refundClient).units.Single(u => u.paidPrice > 0);
+        int refundBalance = Own(refundClient).gold, refundCount = Own(refundClient).units.Count;
+        refundClient.Send(new GameCommand { type = "dismiss", unitId = paidUnit.id });
+        Wait(() => Own(refundClient).units.Count == refundCount - 1, 4000, "paid creature dismissal");
+        Require(Own(refundClient).units.All(u => u.id != paidUnit.id) && Own(refundClient).gold == refundBalance + paidUnit.paidPrice / 2,
+            "Paid dismissal did not remove the purchased creature and refund half the actual paid price rounded down.");
+        dismissalErrors = refundClient.ErrorVersion;
+        refundClient.Send(new GameCommand { type = "dismiss", unitId = paidUnit.id });
+        Wait(() => refundClient.ErrorVersion > dismissalErrors, 4000, "duplicate dismissal rejected");
+        recruitSnapshots = codecs[2].StatePackets;
+        Wait(() => codecs[2].StatePackets > recruitSnapshots, 4000, "snapshot after duplicate dismissal");
+        Require(Own(refundClient).gold == refundBalance + paidUnit.paidPrice / 2 && Own(refundClient).units.Count == refundCount - 1, "Duplicate dismissal refunded twice.");
+        Pass("TCP paid creature dismissal refunds floor(actual paid price / 2) once and snapshots paid prices");
+
         var buyer=clients[0];var buyerState=Own(buyer);
-        var gear=buyerState.market.First(o=>o.kind=="equipment"&&o.price<=buyerState.gold);
-        string gearUnit=buyerState.units[0].id;int moneyBefore=buyerState.gold;
-        buyer.Send(new GameCommand{type="purchase",offerId=gear.id,unitId=gearUnit});
-        Wait(()=>Own(buyer).units[0].equipment.Contains(gear.itemId),4000,"equipment purchase snapshot");
-        Require(Own(buyer).gold==moneyBefore-gear.price,"Equipment price not deducted.");
-        Require(Own(buyer).market.Single(o=>o.id==gear.id).sold,"Bought offer not sold.");
-        int purchaseError=buyer.ErrorVersion;
-        buyer.Send(new GameCommand{type="purchase",offerId=gear.id,unitId=gearUnit});
-        Wait(()=>buyer.ErrorVersion>purchaseError,4000,"duplicate purchase rejected");
-        Require(Own(buyer).gold==moneyBefore-gear.price,"Duplicate purchase charged twice.");
-        string obsolete=Own(buyer).market[0].id;moneyBefore=Own(buyer).gold;
+        string obsolete=buyerState.market[0].id;int moneyBefore=buyerState.gold;
         buyer.Send(new GameCommand{type="refresh"});
         Wait(()=>Own(buyer).market.All(o=>o.id!=obsolete),4000,"new market offer IDs");
         Require(Own(buyer).gold==moneyBefore-2,"Refresh did not deduct authoritative price.");
-        purchaseError=buyer.ErrorVersion;buyer.Send(new GameCommand{type="purchase",offerId=obsolete,unitId=gearUnit});
+        int purchaseError=buyer.ErrorVersion;buyer.Send(new GameCommand{type="purchase",offerId=obsolete});
         Wait(()=>buyer.ErrorVersion>purchaseError,4000,"obsolete offer rejected");
-        Pass("TCP equipment ownership, exact deduction, sold offers and stale market IDs");
+        var skill=Own(buyer).market.First(o=>o.kind=="skill"&&o.price<=Own(buyer).gold);moneyBefore=Own(buyer).gold;
+        buyer.Send(new GameCommand{type="purchase",offerId=skill.id});
+        Wait(()=>Own(buyer).upgrades.Contains(skill.itemId),4000,"permanent skill purchase snapshot");
+        Require(Own(buyer).gold==moneyBefore-skill.price,"Permanent skill price not deducted.");
+        Require(Own(buyer).market.All(o=>o.itemId!=skill.itemId),"Learned skill remains for sale.");
+        Require(Own(buyer).units.All(u=>u.equipment.Count==0),"A permanent purchase populated retired equipment.");
+        purchaseError=buyer.ErrorVersion;
+        buyer.Send(new GameCommand{type="purchase",offerId=skill.id});
+        Wait(()=>buyer.ErrorVersion>purchaseError,4000,"duplicate permanent purchase rejected");
+        Require(Own(buyer).gold==moneyBefore-skill.price,"Duplicate purchase charged twice.");
+        Require(string.IsNullOrEmpty(buyer.RejectedPlacementId),"A purchase error was reported as a placement rejection.");
+        Pass("TCP skill-only market, purchase without selected creature, exact deduction and stale offer rejection");
+
+        if (server != null)
+        {
+            // Arrange a late-game inventory, then exercise the real TCP purchase/refresh path.
+            var owner = server.State.players.Single(p => p.id == clients[3].PlayerId);
+            string finalSkill = TradeCatalog.Ids.Last(); owner.upgrades.Clear(); owner.upgrades.AddRange(TradeCatalog.Ids.Where(id => id != finalSkill)); owner.gold = 100;
+            clients[3].Send(new GameCommand { type = "refresh" });
+            Wait(() => Own(clients[3]).market.Count == 1 && Own(clients[3]).market[0].itemId == finalSkill, 4000, "last unlearned skill offer");
+            Require(Own(clients[3]).gold == 98, "Last available skill refresh charged the wrong amount.");
+            clients[3].Send(new GameCommand { type = "purchase", offerId = Own(clients[3]).market[0].id });
+            Wait(() => Own(clients[3]).market.Count == 0 && Own(clients[3]).upgrades.Count == TradeCatalog.Ids.Length, 4000, "all skills learned empty market");
+            int exhaustedGold = Own(clients[3]).gold, errors = clients[3].ErrorVersion;
+            clients[3].Send(new GameCommand { type = "refresh" });
+            Wait(() => clients[3].ErrorVersion > errors, 4000, "exhausted market refresh rejected");
+            int snapshots = codecs[3].StatePackets;
+            Wait(() => codecs[3].StatePackets > snapshots, 4000, "exhausted market final balance");
+            Require(Own(clients[3]).gold == exhaustedGold && Own(clients[3]).market.Count == 0, "Empty refresh spent gold or restored learned skills.");
+            Pass("TCP last-skill purchase exposes an empty market and exhausted refresh never spends gold");
+        }
 
         for (int i = 0; i < 4; i++)
         {
@@ -225,9 +317,15 @@ sealed class NetworkCheck : IDisposable
 
         for (int i = 0; i < 4; i++) if (!Own(clients[i]).ready) clients[i].Send(new GameCommand { type = "ready" });
         Wait(() => clients.All(c => c.State.phase == "battle"), 10000, "all-ready battle");
-        Require(clients.All(c => c.State.fighters.Count >= 8), "Battle units were not broadcast.");
-        Require(clients.All(c => c.State.fighters.All(f => f.attack > 0 && f.attackSpeed > 0 && f.range > 0 && f.speed > 0)),
+        Require(clients.All(c => c.State.fighters.Count(f => !f.neutral) >= 8), "Player battle units were not broadcast.");
+        Require(clients.All(c => c.State.fighters.Where(f => !f.neutral).All(f => f.attack > 0 && f.attackSpeed > 0 && f.range > 0 && f.speed > 0)),
             "Actual combat stats were not included in network snapshots.");
+        Require(clients.All(c => c.State.fighters.Where(f => f.neutral).All(f => f.ownerId == "neutral" && f.slot == -1 && f.maxHp > 0) &&
+            c.State.players.All(p => p.id != "neutral" && p.killIncome >= 0 && p.killIncome <= 5 && p.bountyIncome >= 0 && p.bountyIncome <= 3 && p.eventIncome >= 0)),
+            "Neutral event identity or bounded income fields were not preserved in personalized battle snapshots.");
+        foreach(var connected in clients)
+            if(connected.State.roundEvent.kind != "none")
+                Require(connected.State.fighters.Any(f => f.neutral && f.id == connected.State.roundEvent.fighterId), "Active event fighter was omitted from the snapshot.");
         Wait(() => clients[0].State.fighters.Any(f => f.hp < f.maxHp) || clients[0].State.effects.Count > 0, 12000, "authoritative battle changes");
         Require(clients.All(c => Own(c).connected), "Stale socket incorrectly disconnected a resumed player.");
         Pass("same automatic battle and live authoritative state on all clients");
@@ -288,6 +386,31 @@ sealed class NetworkCheck : IDisposable
     }
 
     private PlayerState Own(ArenaClient client) { return client.State.players.Single(p => p.id == client.PlayerId); }
+    private void CheckFreshRooms()
+    {
+        var signatures = new HashSet<string>();
+        for (int i = 0; i < 6; i++)
+        {
+            using (var freshServer = new ArenaServer(new JsonWireCodec()))
+            using (var freshClient = new ArenaClient(new JsonWireCodec()))
+            {
+                freshServer.Start(0); Require(freshServer.IsRunning, "Fresh test room failed to listen.");
+                freshClient.Connect("127.0.0.1", freshServer.Port, "随机种子验证");
+                var timer = Stopwatch.StartNew(); bool started = false;
+                while (timer.ElapsedMilliseconds < 8000)
+                {
+                    freshServer.Pump(.005f); freshClient.Pump();
+                    if (freshClient.Connected && !started) { freshClient.Send(new GameCommand { type = "start" }); started = true; }
+                    if (freshClient.State != null && freshClient.State.phase == "recruit") break;
+                    Thread.Sleep(4);
+                }
+                Require(freshClient.State != null && freshClient.State.phase == "recruit", "Fresh TCP room failed to recruit.");
+                signatures.Add(string.Join(",", Own(freshClient).shop));
+            }
+        }
+        Require(signatures.Count > 1, "Default TCP rooms repeated one fixed first-round recruitment sequence.");
+        Pass("six independently hosted TCP rooms produce varied first-round recruit choices");
+    }
     private void Pass(string message) { Passed.Add(message); Console.WriteLine("PASS " + message); }
     private static void Require(bool condition, string message) { if (!condition) throw new Exception(message); }
     private void Step()

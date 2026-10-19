@@ -5,19 +5,20 @@ namespace BlockArena.Presentation
 {
     public sealed partial class ArenaWorld
     {
-        const float RitualRiseSeconds=1.2f, RitualChargeSeconds=.3f, RitualFlightSeconds=.45f;
-        const float RitualShotSpacing=.32f, RitualDuration=4.5f;
+        const float RitualRiseSeconds=CommanderRitualTimeline.RiseSeconds, RitualChargeSeconds=CommanderRitualTimeline.NormalCharge, RitualFlightSeconds=CommanderRitualTimeline.NormalFlight;
+        const float RitualDuration=CommanderRitualTimeline.MinimumDuration;
         Transform ritualRoot,ritualColumn,ritualCrystal,ritualCage,ritualCore,ritualRing;
         readonly Transform[] ritualShards=new Transform[5];
         Light ritualLight;
         bool ritualActive,cameraBaseValid;
-        float ritualStartedAt,ritualAge,nextRitualParticle,shakeStartedAt=-10,shakeMagnitude;
+        float ritualStartedAt,ritualAge,nextRitualParticle,ritualEndsAt=RitualDuration,shakeStartedAt=-10,shakeMagnitude;
         int ritualLaunchCount,ritualImpactCount;
         Vector3 cameraBasePosition;
         Quaternion cameraBaseRotation;
 
         internal bool RitualActive { get { return ritualActive; } }
         internal float RitualAge { get { return ritualAge; } }
+        internal float RitualDurationSeconds { get { return ritualEndsAt; } }
         internal int RitualLaunchCount { get { return ritualLaunchCount; } }
         internal int RitualImpactCount { get { return ritualImpactCount; } }
         internal float CameraShakeStrength
@@ -102,11 +103,17 @@ namespace BlockArena.Presentation
             if(!creatures.TryGetValue(key,out steve))return;
             if(!ritualActive){
                 EnsureRitualGeometry();ritualActive=true;ritualStartedAt=Time.unscaledTime;ritualAge=nextRitualParticle=0;
+                ResetExecutionVisuals(true);
+                ritualEndsAt=RitualDuration;
                 ritualLaunchCount=ritualImpactCount=0;ritualRoot.gameObject.SetActive(true);ritualColumn.localPosition=Vector3.down*7;
                 if(SoundCue!=null)SoundCue("ritual_rise",Vector3.zero,.65f);
             }
-            float chargeAt=RitualRiseSeconds+commanderImpacts.Count*RitualShotSpacing;
-            commanderImpacts.Add(new CommanderImpact{key=key,damage=damage,chargeAt=chargeAt,launchAt=chargeAt+RitualChargeSeconds,hitAt=chargeAt+RitualChargeSeconds+RitualFlightSeconds});
+            bool lethal=player.hp==0&&damage>0;
+            CommanderRitualTimeline.Shot? previous=commanderImpacts.Count==0?(CommanderRitualTimeline.Shot?)null:commanderImpacts[commanderImpacts.Count-1].timing;
+            CommanderRitualTimeline.Shot timing=CommanderRitualTimeline.Next(lethal,previous);
+            commanderImpacts.Add(new CommanderImpact{key=key,slot=player.slot,damage=damage,lethal=lethal,timing=timing,chargeAt=timing.chargeAt,launchAt=timing.launchAt,hitAt=timing.hitAt});
+            ritualEndsAt=CommanderRitualTimeline.EndAt(timing);
+            if(lethal){plannedExecutionCount++;EnsureExecutionGeometry(player.slot);}
             commanderHitCount++;
         }
 
@@ -116,7 +123,8 @@ namespace BlockArena.Presentation
             // Absolute unscaled time avoids animation speed changing with frame rate or a stalled frame.
             ritualAge=Mathf.Max(0,Time.unscaledTime-ritualStartedAt);
             float rise=Mathf.SmoothStep(0,1,Mathf.Clamp01(ritualAge/RitualRiseSeconds));
-            float sink=Mathf.SmoothStep(0,1,Mathf.Clamp01((ritualAge-3.75f)/.75f));
+            float duration=ritualEndsAt;
+            float sink=Mathf.SmoothStep(0,1,Mathf.Clamp01((ritualAge-(duration-.75f))/.75f));
             ritualColumn.localPosition=Vector3.down*7*(1-rise+sink);
             ritualCrystal.localPosition=new Vector3(0,5.35f+Mathf.Sin(ritualAge*3.8f)*.12f,0);
             ritualCore.localRotation=Quaternion.Euler(45+Mathf.Sin(ritualAge)*12,ritualAge*78,45);
@@ -126,16 +134,21 @@ namespace BlockArena.Presentation
                 CommanderImpact impact=commanderImpacts[i];VoxelCreature steve;
                 if(!creatures.TryGetValue(impact.key,out steve))continue;
                 float strength=Mathf.Clamp01(.2f+Mathf.Sqrt(Mathf.Clamp01(impact.damage/20f))*.8f);
-                if(!impact.charged&&ritualAge>=impact.chargeAt){impact.charged=true;if(SoundCue!=null)SoundCue("ritual_charge",ritualCrystal.position,strength);}
+                if(!impact.charged&&ritualAge>=impact.chargeAt){impact.charged=true;if(SoundCue!=null&&ritualAge-impact.chargeAt<.25f)SoundCue(impact.lethal?"execution_charge":"ritual_charge",impact.lethal?steve.Target:ritualCrystal.position,impact.lethal?1:strength);}
                 if(ritualAge>=impact.chargeAt&&ritualAge<impact.launchAt)charge=Mathf.Max(charge,Mathf.Clamp01((ritualAge-impact.chargeAt)/RitualChargeSeconds));
                 if(!impact.launched&&ritualAge>=impact.launchAt){
-                    impact.launched=true;ritualLaunchCount++;LaunchRitualBolt(impact,steve);
-                    if(SoundCue!=null)SoundCue("ritual_launch",ritualCrystal.position,strength);
+                    impact.launched=true;ritualLaunchCount++;
+                    if(!impact.lethal)LaunchRitualBolt(impact,steve);
+                    if(SoundCue!=null&&ritualAge-impact.launchAt<.25f)SoundCue("ritual_launch",ritualCrystal.position,strength);
                 }
                 if(!impact.struck&&ritualAge>=impact.hitAt){
                     impact.struck=true;ritualImpactCount++;StrikeCommander(impact,steve,strength);
                 }
+                if(impact.lethal&&!impact.shattered&&ritualAge>=impact.hitAt+ExecutionShatterDelay){
+                    impact.shattered=true;
+                }
             }
+            UpdateExecutionVisuals();
             ritualCore.localScale=Vector3.one*(.87f+charge*.36f+Mathf.Sin(ritualAge*6)*.035f);
             ritualCage.localScale=Vector3.one*(1+charge*.12f);
             float ringSize=(.45f+rise*.55f)*(1-sink)*(1+Mathf.Sin(ritualAge*7)*.025f);
@@ -159,13 +172,18 @@ namespace BlockArena.Presentation
                     EmitRitualParticle(ritualCrystal.position+offset,-offset*3,VoxelAssets.Hex("#FBC5F2"),.13f,.32f);
                 }
             }
-            if(ritualAge>=RitualDuration){ritualActive=false;ritualRoot.gameObject.SetActive(false);commanderImpacts.Clear();}
+            if(ritualAge>=duration){
+                ritualActive=false;ritualRoot.gameObject.SetActive(false);
+                foreach(VoxelCreature commander in creatures.Values)if(commander.Kind=="steve")commander.CancelDefeatImpact();
+                commanderImpacts.Clear();ResetExecutionVisuals(false);
+            }
         }
 
         void LaunchRitualBolt(CommanderImpact impact,VoxelCreature steve)
         {
             FlyingEffect bolt=EffectObject();bolt.start=ritualCrystal.position;bolt.end=steve.Target+Vector3.up*1.15f;
             bolt.targetKey=impact.key;bolt.duration=RitualFlightSeconds;bolt.soul=true;bolt.size=1+Mathf.Sqrt(impact.damage/20f)*.3f;
+            if(impact.lethal)bolt.size*=1.4f;
             bolt.filter.sharedMesh=VoxelAssets.Cached("ritual/judgment-bolt",b=>{
                 b.Box(Vector3.zero,new Vector3(.24f,.24f,.66f),VoxelAssets.Hex("#FFD9F6"),Quaternion.Euler(0,0,45));
                 b.Box(new Vector3(0,0,-.42f),new Vector3(.16f,.16f,.34f),VoxelAssets.Hex("#D58DED"));
@@ -176,8 +194,13 @@ namespace BlockArena.Presentation
 
         void StrikeCommander(CommanderImpact impact,VoxelCreature steve,float strength)
         {
-            steve.PlayDefeatImpact(strength);Vector3 at=steve.Target+Vector3.up*1.15f;
-            for(int p=0;p<20;p++){
+            if(impact.lethal){
+                executionCount++;steve.PlayExecution(ritualStartedAt+impact.hitAt);
+                if(ritualAge-impact.hitAt>.3f)return;
+            }
+            else steve.PlayDefeatImpact(strength);
+            Vector3 at=steve.Target+Vector3.up*1.15f;
+            for(int p=0;p<(impact.lethal?0:20);p++){
                 float angle=p*Mathf.PI*2/20;
                 Vector3 velocity=new Vector3(Mathf.Cos(angle)*(1.8f+strength),.9f+Mathf.Abs(Mathf.Sin(angle))*.9f,Mathf.Sin(angle)*(1.8f+strength));
                 EmitRitualParticle(at,velocity,p%3==0?VoxelAssets.Hex("#FFF0DB"):VoxelAssets.Hex("#EE98D8"),.11f+strength*.055f,.52f);
@@ -185,7 +208,8 @@ namespace BlockArena.Presentation
             FlyingEffect number=EffectObject();number.start=steve.Target+Vector3.up*2.45f;number.end=number.start;
             number.duration=1.05f;number.number=true;number.size=1.65f;number.filter.sharedMesh=VoxelAssets.CommanderDamageNumber(impact.damage);
             shakeMagnitude=.025f+Mathf.Sqrt(Mathf.Clamp01(impact.damage/20f))*.14f;shakeStartedAt=Time.unscaledTime;
-            if(SoundCue!=null)SoundCue("commander_hit",at,strength);
+            if(impact.lethal)shakeMagnitude=Mathf.Min(.17f,shakeMagnitude+.04f);
+            if(SoundCue!=null)SoundCue(impact.lethal?"execution_hit":"commander_hit",at,impact.lethal?1:strength);
         }
 
         void EmitRitualParticle(Vector3 position,Vector3 velocity,Color color,float size,float lifetime)
@@ -205,7 +229,8 @@ namespace BlockArena.Presentation
         }
         void ResetRitual()
         {
-            ritualActive=false;ritualAge=0;ritualLaunchCount=ritualImpactCount=0;shakeMagnitude=0;shakeStartedAt=-10;
+            ritualActive=false;ritualAge=0;ritualEndsAt=RitualDuration;ritualLaunchCount=ritualImpactCount=0;shakeMagnitude=0;shakeStartedAt=-10;
+            ResetExecutionVisuals(true);
             if(ritualRoot!=null)ritualRoot.gameObject.SetActive(false);
             if(viewCamera!=null&&cameraBaseValid){viewCamera.transform.position=cameraBasePosition;viewCamera.transform.rotation=cameraBaseRotation;}
             foreach(VoxelCreature creature in creatures.Values)if(creature.Kind=="steve")creature.CancelDefeatImpact();

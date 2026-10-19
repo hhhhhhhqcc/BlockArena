@@ -45,9 +45,10 @@ internal static partial class Program
         }
         Equal("prep", game.State.phase);
     }
-    private static void Battle(ArenaGame game)
+    private static void Battle(ArenaGame game, bool withEvent = false)
     {
         if (game.State.phase == "recruit") ChooseAll(game);
+        if (!withEvent) game.State.roundEvent = new ArenaEventState { kind = "none", round = game.State.round };
         foreach (PlayerState p in game.State.players) if (!p.eliminated) p.ready = true;
         for (int i = 0; i < 30 && game.State.phase == "prep"; i++) game.Tick(.05f);
         Equal("battle", game.State.phase);
@@ -359,7 +360,7 @@ internal static partial class Program
             PlayerState eliminated = g.State.players[1]; eliminated.hp = 1; Battle(g);
             foreach (FighterState f in g.State.fighters) f.hp = (4 - f.slot) * 10;
             g.State.timeLeft = .001f; g.Tick(.05f); Assert(eliminated.eliminated); int count = eliminated.units.Count;
-            Advance(g, ArenaGame.ResultsSeconds+.1f); Equal("recruit", g.State.phase); Assert(!eliminated.recruitPending && eliminated.recruitChoice == null); Equal(0, eliminated.shop.Length); Equal(count, eliminated.units.Count);
+            Advance(g, g.State.timeLeft+.1f); Equal("recruit", g.State.phase); Assert(!eliminated.recruitPending && eliminated.recruitChoice == null); Equal(0, eliminated.shop.Length); Equal(count, eliminated.units.Count);
             Reject(() => g.Apply(eliminated.id, new GameCommand { type = "choose", index = 0 }));
         });
         Check("last surviving player wins; only host can restart into a fresh recruit", () =>
@@ -371,6 +372,8 @@ internal static partial class Program
         });
         EconomyChecks();
         AbilityChecks();
+        RitualChecks();
+        AntiSnowballChecks();
         Check("seeded four-player AI match completes without hanging", () =>
         {
             ArenaGame g = new ArenaGame("host", "测试", 2026); g.Apply("host", new GameCommand { type = "start" }); g.SetConnected("host", false);

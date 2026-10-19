@@ -4,7 +4,7 @@
 
 菜单、准备、战斗三首循环曲共享 96 BPM、16 小节、40 秒的主题结构。菜单采用柔和和声与稀疏玻璃琴音；准备阶段增加轻拨弦和低音；战斗加入轻鼓点、紧凑低音和琶音。它们使用相同时间基准，阶段切换时保持拍点，并用 0.85 秒交叉淡化。
 
-资源为 24 kHz、16 bit、双声道 PCM WAV，共 3 首音乐和 20 个音效，约 12.42 MiB。音乐峰值不超过 0.52，目标 RMS 约 0.105–0.115；音效峰值不超过 0.48，均预留混音余量。循环尾音写回下一段开头，避免裁切。`Assets/Resources/ArenaAudio/manifest.json` 保存每个成品 WAV 的实际峰值、RMS、循环边界差值、削波样本数和 SHA-256。
+资源为 24 kHz、16 bit、双声道 PCM WAV，共 3 首音乐和 24 个音效，约 12.67 MiB。音乐峰值不超过 0.52，目标 RMS 约 0.105–0.115；音效峰值不超过 0.48，均预留混音余量。循环尾音写回下一段开头，避免裁切。`Assets/Resources/ArenaAudio/manifest.json` 保存每个成品 WAV 的实际峰值、RMS、循环边界差值、削波样本数和 SHA-256。
 
 ## 接入
 
@@ -21,5 +21,7 @@
 验收可读取 `ClipsLoaded`（23）、`MusicTrackCount`（3）、`CurrentMusic`、`MusicIsPlaying` 和 `SoundCount`；后者只在实际分配声道并调用播放后递增。原生可视播放器还可通过 `AudioListener.GetOutputData` 检查混音输出。
 
 ## 重新生成
+
+0.7.0 新增 `countdown`、`countdown_urgent`、`execution_charge`、`execution_hit`。倒计时按权威快照在招募、准备及战斗最后五秒提醒，最后三秒使用更急的双音；相同秒数不重复，延迟包不补播错过的秒数，重连先建立基线。提醒与处决使用关键音效声道，跟随音效音量与静音设置。
 
 运行 `python -B Tools/Generate-ArenaAudio.py`，默认写入当前脚本所属工程的 `Assets/Resources/ArenaAudio`。可用 `--output <目录>` 指定路径。固定种子保证相同版本输出一致；已有 `.meta` 的 GUID 会保留。无需安装 Python 扩展。

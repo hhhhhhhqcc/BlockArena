@@ -30,4 +30,4 @@ foreach ($suite in @('CoreChecks','NetworkChecks')) {
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $targetSuite -Force }
 }
 Write-Output ('EXPORTED_PROJECT ' + $targetRoot)
-Get-Item -LiteralPath (Join-Path $targetRoot 'Builds\Windows-0.6.0\BlockArena.exe') | Select-Object FullName,Length
+Get-Item -LiteralPath (Join-Path $targetRoot 'Builds\Windows-0.8.0\BlockArena.exe') | Select-Object FullName,Length

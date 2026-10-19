@@ -106,6 +106,10 @@ namespace BlockArena.Runtime
             Register("combat_death", .22f, .14f, .12f, 0, false);
             Register("combat_heal", .25f, .16f, .12f, 0, false);
             Register("error", .40f, .2f, 0, 1, true);
+            Register("countdown", .62f, .18f, 0, 3, true);
+            Register("countdown_urgent", .74f, .18f, 0, 3, true);
+            Register("execution_charge", .76f, .2f, .08f, 4, true);
+            Register("execution_hit", .88f, .13f, .08f, 5, true);
             Alias("ui_click", "click"); Alias("buy", "purchase"); Alias("gold", "coin");
             Alias("drag", "pickup"); Alias("drop", "place"); Alias("start", "battle_start");
             Alias("win", "victory"); Alias("lose", "defeat");

@@ -70,64 +70,67 @@ namespace BlockArena.Runtime
         Rect MarketRect { get { EnsureMarketPosition(); return new Rect(marketPosition.x,marketPosition.y,476,434); } }
         Rect MarketToggleRect { get { return new Rect(width/2+118,height-74,136,46); } }
         Rect BestiaryToggleRect { get { return new Rect(width/2-254,height-74,136,46); } }
-        Rect RosterRect { get { return new Rect(width-344,83,326,240); } }
         Rect PrepareBannerRect { get { return new Rect(width/2-210,ReadyRect.y-31,420,25); } }
         Rect ReadyRect { get { return new Rect(width/2-106,height-74,212,46); } }
-        Rect SelectionRect { get { return new Rect(30,height-372,314,302); } }
         Rect NoticeRect { get { return new Rect(width/2-290,PrepareBannerRect.y-66,580,48); } }
 
         public bool Contains(Vector2 screen)
         {
-            Metrics(); UpdateMarketPointer();
-            if (marketPointerOwned || marketDragging || releasedPointerFrame == Time.frameCount || audioPointerOwned || audioReleasedFrame == Time.frameCount) return true;
+            Metrics(); UpdateMarketPointer(); UpdateRoster();
+            if (marketPointerOwned || marketDragging || releasedPointerFrame == Time.frameCount || audioPointerOwned || audioReleasedFrame == Time.frameCount || skillPointerOwned || skillReleasedFrame == Time.frameCount) return true;
             Vector2 p = new Vector2(screen.x / scale, (Screen.height - screen.y) / scale);
             if (AudioCovers(p)) return true;
+            if (EconomyCovers(p)) return true;
             var state = app.State; var me = app.Me;
             if (state == null || app.ShowRoom || app.ShowHelp || app.ShowBestiary || state.phase == "finished" ||
                 (state.phase == "recruit" && me != null && me.recruitPending && !me.eliminated)) return true;
-            if (HeaderRect.Contains(p) || HeaderActionsRect.Contains(p) || RosterRect.Contains(p)) return true;
+            if (HeaderRect.Contains(p) || HeaderActionsRect.Contains(p) || RosterCovers(p)) return true;
             if (app.CanPrepare && (((app.Me.ready || state.phase == "recruit") && PrepareBannerRect.Contains(p)) || ReadyRect.Contains(p) || MarketToggleRect.Contains(p) || BestiaryToggleRect.Contains(p))) return true;
             if(MarketVisible&&MarketRect.Contains(p))return true;
             if (!string.IsNullOrEmpty(app.Notice) && NoticeRect.Contains(p)) return true;
-            return app.CanPrepare && app.SelectedId != null && SelectionRect.Contains(p);
+            return SkillUiCovers(p);
         }
 
         public void SetHover(string titleText, string bodyText, Vector2 screenPosition)
         {
+            ResetInspection();
             PrepareHover(titleText);
             inspectionDefinition=null;
             hoverTitle = titleText;
-            hoverBody = bodyText;
+            hoverBody = ArenaDescription.Format(bodyText);
             hoverScreenPosition = screenPosition;
             hoverUntil = Time.unscaledTime + .15f;
         }
 
-        public void ClearHover() { hoverTitle = null; hoverBody = null; inspectionDefinition=null; }
+        public void ClearHover() { hoverTitle = null; hoverBody = null; inspectionDefinition=null; ResetInspection(); }
         public void SetInspection(CreatureDefinition definition,FighterState fighter,UnitState unit,PlayerState owner,Vector2 screenPosition)
         {
+            if(definition==null){ClearHover();return;}
+            BeginInspection(definition,fighter,unit,owner);
             PrepareHover(fighter!=null?fighter.id:unit!=null?unit.id:definition.id);
             inspectionDefinition=definition;inspectionUnit=unit;inspectionOwner=owner;
             inspectionFighter=fighter??(owner!=null&&unit!=null?ArenaGame.PreviewFighter(owner,unit):null);
+            CacheInspectionSkills();
             hoverScreenPosition=screenPosition;hoverUntil=Time.unscaledTime+.15f;hoverTitle=null;
         }
 
         public void Draw()
         {
-            Setup(); Metrics(); AdvanceMotion(); UpdateMarketPointer(); handRects.Clear(); textRects.Clear();
+            Setup(); Metrics(); AdvanceMotion(); UpdateMarketPointer(); UpdateRoster(); handRects.Clear(); textRects.Clear();
             Matrix4x4 previous = GUI.matrix;
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale,scale,1));
             GUI.color = Color.white;
             if (app.State == null) Menu();
             else
             {
-                bool blocked = ModalOpen || AudioBlocksUnderlying || (MarketVisible && (MarketRect.Contains(Mouse()) || marketPointerOwned));
+                bool blocked = ModalOpen || AudioBlocksUnderlying || SkillBlocksUnderlying || EconomyBlocksUnderlying || (MarketVisible && (MarketRect.Contains(Mouse()) || marketPointerOwned));
                 GUI.enabled = !blocked;
-                Header(); Health();
+                Header(); Health(); DrawRosterTab();
                 if (app.CanPrepare) Preparation();
-                Selection();
-                GUI.enabled = !ModalOpen && !AudioBlocksUnderlying;
+                GUI.enabled = !ModalOpen && !AudioBlocksUnderlying && !SkillBlocksUnderlying && !EconomyBlocksUnderlying;
                 if(MarketVisible) Market();
                 GUI.enabled = true;
+                DrawEconomyObjectives();
                 if (app.State.phase == "results") Results();
                 if (app.State.phase == "recruit" && app.Me != null && app.Me.recruitPending && !app.Me.eliminated) Recruit();
                 if (app.Me != null && app.Me.eliminated && app.State.phase != "finished")
@@ -137,6 +140,8 @@ namespace BlockArena.Runtime
             }
             if(app.ShowBestiary) Bestiary();
             if (app.ShowHelp) Help();
+            DrawSkillPanels();
+            DrawArmyManagement();
             if (!string.IsNullOrEmpty(app.Notice))
             {
                 var r = NoticeRect;
@@ -196,7 +201,7 @@ namespace BlockArena.Runtime
             Fill(new Rect(room.x+17,ry+9,7,7),gold);Fill(new Rect(room.x+30,ry+12,6,6),mint);
             Fill(new Rect(room.x+13,ry+19,15,13),gold);Fill(new Rect(room.x+30,ry+21,11,11),mint);
             if(GUI.enabled&&book.Contains(Mouse()))SetHover("万物图鉴","查看生物、属性与技能。",Input.mousePosition);
-            if(GUI.enabled&&help.Contains(Mouse()))SetHover("玩法帮助","移动、布阵、装备与联机说明。",Input.mousePosition);
+            if(GUI.enabled&&help.Contains(Mouse()))SetHover("玩法帮助","移动、布阵、永久技能与联机说明。",HudPointer);
             if(GUI.enabled&&room.Contains(Mouse()))SetHover("房间",app.Connected?"查看玩家或离开房间。":"连接已中断，打开房间重新连接。",Input.mousePosition);
             if(!app.Connected)Text(new Rect(width-344,58,326,25),"连接中断 · 打开房间重连",small,new Color(1,.57f,.43f));
         }
@@ -217,7 +222,9 @@ namespace BlockArena.Runtime
                 if(damageAge<.4f)Fill(new Rect(row.x+4,row.y+4,row.width-8,row.height-8),new Color(.9f,.16f,.12f,(.4f-damageAge)*.45f));
                 ArenaIcons.Draw(new Rect(row.x+13,row.y+16,25,25),"coin");
                 Text(new Rect(row.x+42,row.y+15,59,29),p.gold.ToString(),label,shownEliminated?muted:gold);
-                Text(new Rect(row.x+105,row.y+5,158,25),Trim(p.name,7)+(p.id==app.PlayerId?" ·你":""),micro,shownEliminated?muted:white);
+                bool leader=app.State.phase=="battle"&&p.id==app.State.leaderId;
+                if(leader) { float pulse=.5f+.5f*Mathf.Sin(Time.unscaledTime*4);Fill(new Rect(row.x+4,row.y+3,row.width-8,2),new Color(gold.r,gold.g,gold.b,.6f+.4f*pulse)); }
+                Text(new Rect(row.x+105,row.y+5,158,25),(leader?"★ ":"")+Trim(p.name,leader?5:7)+(p.id==app.PlayerId?" ·你":""),micro,shownEliminated?muted:leader?gold:white);
                 Rect bar=new Rect(row.x+106,row.y+32,196,12);
                 Fill(bar,new Color(.015f,.025f,.03f));
                 float trail=motion==null?p.hp:motion.trailHp;
@@ -237,63 +244,6 @@ namespace BlockArena.Runtime
             if(IconButton(BestiaryToggleRect,"book","生物图鉴",new Color(.19f,.24f,.24f)))app.ShowBestiary=true;
         }
 
-        void Selection()
-        {
-            UnitState unit=SelectedUnit();if(!app.CanPrepare||unit==null)return;
-            var item=CreatureCatalog.Get(unit.kind);Rect r=SelectionRect;float x=r.x,y=r.y;
-            Panel(r,new Color(.08f,.12f,.13f,.98f));ArenaIcons.Creature(new Rect(x+16,y+13,59,59),item.model??item.id,MobColor(item));
-            Text(new Rect(x+87,y+13,207,25),item.role,small,mint);Text(new Rect(x+87,y+42,207,36),item.name,heading);
-            FighterState preview=ArenaGame.PreviewFighter(app.Me,unit);
-            Stat(new Rect(x+19,y+97,132,30),"heart",preview.maxHp.ToString("0.#"));Stat(new Rect(x+162,y+97,133,30),"sword",preview.attack.ToString("0.#"));
-            Text(new Rect(x+20,y+139,274,46),"攻速 "+preview.attackSpeed.ToString("0.##")+" / 秒   射程 "+preview.range.ToString("0.#"),small,muted);
-            Text(new Rect(x+20,y+189,272,25),"装备栏  "+(unit.equipment==null?0:unit.equipment.Count)+" / 3",small,gold);
-            for(int i=0;i<3;i++)
-            {
-                Rect slot=new Rect(x+20+i*92,y+224,84,59);Panel(slot,new Color(.1f,.15f,.16f,.95f));
-                if(unit.equipment!=null&&i<unit.equipment.Count)
-                {
-                    var gear=TradeCatalog.Get(unit.equipment[i]);ArenaIcons.Draw(new Rect(slot.x+27,slot.y+5,30,30),ItemIcon(gear));Text(new Rect(slot.x+3,slot.y+38,78,20),Compact(gear.name,5),micro,gold);
-                    if(slot.Contains(Mouse()))SetHover(gear.name,gear.description,Input.mousePosition);
-                }
-                else Text(new Rect(slot.x,slot.y+14,84,32),"＋",centered,muted);
-            }
-        }
-
-        void Recruit()
-        {
-            Shade();float cardW=308,gap=22,total=cardW*3+gap*2,x=(width-total)/2,y=(height-674)/2;
-            Text(new Rect(x,y-28,total,26),"灵魂契约  /  第 "+app.State.round.ToString("00")+" 轮",small,gold);
-            Text(new Rect(x,y+7,total-250,54),app.State.round==1?"你的军团，由此启程。":"为下一场战斗，招募援军。",title,white);
-            ArenaIcons.Draw(new Rect(x+total-205,y+14,36,36),"coin");Text(new Rect(x+total-160,y+12,160,40),app.Me.gold+" 金币",heading,gold);
-            Text(new Rect(x,y+69,total,29),"花费金币选择 1 只加入永久军团，或保留金币直接进入准备。",label,muted);
-            string[] choices=app.Me.shop;if(choices==null)return;
-            bool pending=pendingRound==app.State.round&&Time.unscaledTime<pendingUntil;
-            for(int i=0;i<Mathf.Min(3,choices.Length);i++)
-            {
-                CreatureDefinition item=CreatureCatalog.Get(choices[i]);float xx=x+i*(cardW+gap);Color c=MobColor(item);
-                Rect card=new Rect(xx,y+116,cardW,438);Panel(card,new Color(.09f,.13f,.14f,.99f));
-                bool cardHovered=card.Contains(Mouse());recruitCards[i].Step(cardHovered?1:0,18,.6f);
-                float entry=Mathf.Clamp(recruitMotion.value,0,1.12f),lift=recruitCards[i].value*5;
-                Fill(new Rect(xx+8,y+124,(cardW-16)*Mathf.Clamp01(entry),3),c);
-                float iconScale=.83f+entry*.17f+recruitCards[i].value*.04f;
-                ArenaIcons.Creature(new Rect(xx+154-81*iconScale,y+211-68.5f*iconScale+(1-entry)*18-lift,162*iconScale,137*iconScale),item.model??item.id,c);
-                Text(new Rect(xx+22,y+285,264,23),CategoryName(item.category)+"  ·  "+item.role,small,Color.Lerp(c,white,.45f));
-                Text(new Rect(xx+22,y+317,264,39),item.name,heading,white);
-                Text(new Rect(xx+22,y+364,264,57),Compact(item.description,28),small,muted);
-                Stat(new Rect(xx+22,y+427,82,28),"heart",item.hp.ToString("0.#"));
-                Stat(new Rect(xx+112,y+427,82,28),"sword",item.attack.ToString("0.#"));
-                Stat(new Rect(xx+202,y+427,88,28),"speed",item.attackSpeed.ToString("0.##"));
-                bool affordable=app.Me.gold>=item.price;GUI.enabled=!pending&&affordable&&app.Connected;
-                if(IconButton(new Rect(xx+20,y+484,cardW-40,49),"coin",pending?"契约确认中…":affordable?"招募  ·  "+item.price+" 金币":"金币不足  ·  需要 "+item.price,new Color(.18f,.61f,.55f),"purchase"))
-                {pendingRound=app.State.round;pendingUntil=Time.unscaledTime+3;app.Send(new GameCommand{type="choose",index=i});}
-                GUI.enabled=true;
-            }
-            GUI.enabled=!pending&&app.Connected;
-            if(IconButton(new Rect(x+total-268,y+579,268,45),"skip","保留金币 · 跳过招募",new Color(.28f,.24f,.17f)))app.Send(new GameCommand{type="skip"});
-            GUI.enabled=true;
-            Text(new Rect(x,y+580,total-295,50),"剩余 "+Mathf.CeilToInt(app.State.timeLeft)+" 秒  ·  超时由服务器结算选择\n每轮基础收入 + 击杀奖励 + 排名奖励",small,muted);
-        }
-
         void Market()
         {
             Rect r=MarketRect;Panel(r,new Color(.075f,.11f,.12f,.99f));
@@ -301,36 +251,37 @@ namespace BlockArena.Runtime
             // The window and every button keep fixed hit rectangles; only inset ornament moves.
             Fill(new Rect(r.x+13,r.y+49,(r.width-26)*Mathf.Clamp01(reveal),2),mint);
             ArenaIcons.Draw(new Rect(r.x+15,r.y+11+bump,28,28),"bag");
-            Text(new Rect(r.x+52,r.y+10+bump,320,31),"补给商店",label,gold);
+            Text(new Rect(r.x+52,r.y+10+bump,320,31),"永久技能商店",label,gold);
             for(int i=0;i<3;i++)Fill(new Rect(r.x+319+i*7,r.y+22,3,7),new Color(.59f,.47f,.3f));
             bool active=GUI.enabled;GUI.enabled=active&&app.ShowShop&&!marketDragging;
             if(IconButton(new Rect(r.xMax-47,r.y+9,35,33),"close","",new Color(.17f,.22f,.23f)))app.ShowShop=false;
-            UnitState target=SelectedUnit();
-            Text(new Rect(r.x+15,r.y+58,446,25),target==null?"装备：先选择场上的生物":"装备目标 · "+CreatureCatalog.Get(target.kind).name+"  "+(target.equipment==null?0:target.equipment.Count)+"/3",micro,target==null?muted:mint);
+            Text(new Rect(r.x+15,r.y+58,446,25),"永久强化现有与未来的适用生物",micro,muted);
             if(app.Me.market!=null)for(int i=0;i<Mathf.Min(4,app.Me.market.Count);i++)
             {
-                ShopOffer offer=app.Me.market[i];TradeDefinition item=TradeCatalog.Get(offer.itemId);
-                Rect card=new Rect(r.x+14+(i%2)*229,r.y+88+(i/2)*147,215,137);
+                ShopOffer offer=app.Me.market[i];TradeDefinition item=TradeCatalog.Get(offer.itemId);if(item.type!="skill")continue;
+                Rect card=MarketSkillCardRect(i);int matches=MatchingArmyCount(item);
                 bool hovered=GUI.enabled&&card.Contains(Mouse())&&!marketDragging;
                 Panel(card,hovered?new Color(.145f,.21f,.22f,.99f):new Color(.09f,.14f,.15f,.99f));
+                if(matches>0)Fill(new Rect(card.x+4,card.y+5,3,card.height-10),mint);
                 marketCards[i].Step(hovered?1:0,23,.57f);
                 float lift=marketCards[i].value*2.8f;
                 ArenaIcons.Draw(new Rect(card.x+10,card.y+10+bump*.5f-lift,28,28),ItemIcon(item));
                 Text(new Rect(card.x+43,card.y+9,162,26),item.name,micro,white);
-                Text(new Rect(card.x+11,card.y+42,193,24),item.type=="equipment"?"装备 · 单只生物":"技能 · "+TargetName(item.target),micro,item.type=="equipment"?gold:mint);
-                Text(new Rect(card.x+11,card.y+68,191,24),Compact(item.description,11),micro,muted);
-                bool owned=item.type=="skill"&&app.Me.upgrades!=null&&app.Me.upgrades.Contains(item.id);
-                bool duplicate=target!=null&&target.equipment!=null&&target.equipment.Contains(item.id);
-                bool full=target!=null&&target.equipment!=null&&target.equipment.Count>=3;
-                bool matches=target!=null&&TradeCatalog.Applies(item,CreatureCatalog.Get(target.kind));
-                string why=offer.sold?"已售出":owned?"已掌握":item.type=="equipment"&&target==null?"先选生物":item.type=="equipment"&&!matches?"不适用":item.type=="equipment"&&duplicate?"已装备":item.type=="equipment"&&full?"装备已满":app.Me.gold<offer.price?"金币不足":"购买";
-                GUI.enabled=active&&app.ShowShop&&!marketDragging&&app.Connected&&why=="购买";
+                Text(new Rect(card.x+11,card.y+42,193,24),TargetName(item.target)+" · 详情 ›",micro,gold);
+                Text(new Rect(card.x+11,card.y+68,191,24),matches>0?"当前 "+matches+" 只可强化":"当前无匹配 · 可预购",micro,matches>0?mint:muted);
+                SkillDetailButton(new Rect(card.x+7,card.y+6,card.width-14,85),item);
+                bool owned=app.Me.upgrades!=null&&app.Me.upgrades.Contains(item.id);
+                string why=offer.sold?"已售出":owned?"已掌握":!app.Connected?"未连接":app.Me.gold<offer.price?"金币不足":"学习";
+                GUI.enabled=active&&app.ShowShop&&!marketDragging&&app.Connected&&why=="学习";
                 if(IconButton(new Rect(card.x+10,card.y+97,195,30),"coin",offer.price+" · "+why,new Color(.22f,.4f,.35f),"purchase"))
-                    app.Send(new GameCommand{type="purchase",offerId=offer.id,unitId=item.type=="equipment"?app.SelectedId:null});
+                    app.Send(new GameCommand{type="purchase",offerId=offer.id});
                 GUI.enabled=active&&app.ShowShop&&!marketDragging;
-                if(GUI.enabled&&card.Contains(Mouse()))SetHover(item.name,item.description+"\n"+(item.type=="equipment"?"应用到选中生物，最多 3 件。":"永久作用于"+TargetName(item.target)+"，包括未来招募。")+"\n价格 "+offer.price+" 金币",Input.mousePosition);
+                if(GUI.enabled&&card.Contains(Mouse()))SkillHover(item);
             }
-            GUI.enabled=active&&app.ShowShop&&!marketDragging&&app.Me.gold>=2&&app.Connected;
+            int available=AvailableSkillCount();
+            if(app.Me.market==null||app.Me.market.Count==0)
+                Text(new Rect(r.x+24,r.y+174,r.width-48,115),available==0?"所有永久技能已掌握\n可在「已购技能」查看效果与适用生物":"本批技能已售罄\n刷新商店查看其他永久技能",centered,available==0?mint:muted);
+            GUI.enabled=active&&app.ShowShop&&!marketDragging&&app.Me.gold>=TradeCatalog.RefreshPrice&&app.Connected&&available>0;
             if(IconButton(new Rect(r.x+14,r.y+388,221,32),"refresh","刷新 · 2 金币",new Color(.3f,.26f,.17f),"refresh"))app.Send(new GameCommand{type="refresh"});
             GUI.enabled=active;
             ArenaIcons.Draw(new Rect(r.x+352,r.y+390,25,25),"coin");Text(new Rect(r.x+386,r.y+389,69,28),app.Me.gold.ToString(),label,gold);
@@ -359,20 +310,20 @@ namespace BlockArena.Runtime
             GUI.EndScrollView();
             CreatureDefinition selected=CreatureCatalog.Get(bestiaryKind);Color color=MobColor(selected);
             var abilityIds=selected.skills??new string[0];float contentHeight=412;
-            foreach(string id in abilityIds)contentHeight+=81+small.CalcHeight(new GUIContent(CreatureAbilities.Get(id).description),618);
+            foreach(string id in abilityIds)contentHeight+=81+small.CalcHeight(new GUIContent(ArenaDescription.Format(CreatureAbilities.Get(id).description)),618);
             detailScroll=GUI.BeginScrollView(new Rect(x+350,y+84,738,588),detailScroll,new Rect(0,0,714,Mathf.Max(588,contentHeight)));
             ArenaIcons.Creature(new Rect(17,7,157,151),selected.model??selected.id,color);
             Text(new Rect(202,20,478,52),selected.name,title,white);Text(new Rect(205,86,480,30),CategoryName(selected.category)+"  /  "+selected.role,small,Color.Lerp(color,white,.45f));
             ArenaIcons.Draw(new Rect(203,127,28,28),"coin");Text(new Rect(243,127,350,31),selected.price+" 金币  ·  阶位 "+selected.tier,label,gold);
-            Text(new Rect(17,185,678,75),selected.description,label,muted);
+            Text(new Rect(17,185,678,75),ArenaDescription.Format(selected.description),label,muted);
             Stat(new Rect(17,269,142,32),"heart",selected.hp.ToString("0.#"));Stat(new Rect(185,269,142,32),"sword",selected.attack.ToString("0.#"));Stat(new Rect(352,269,142,32),"speed",selected.attackSpeed.ToString("0.##")+"/秒");Stat(new Rect(520,269,158,32),"range",selected.range.ToString("0.#"));
             Text(new Rect(19,321,665,48),(selected.flying?"飞行生物   ·   ":"")+"移速 "+selected.speed.ToString("0.#")+"   ·   "+TagNames(selected.tags),small,mint);
             float yy=384;Text(new Rect(17,yy-25,660,29),"天赋与技能",label,gold);
             foreach(string id in abilityIds)
             {
-                AbilityDefinition ability=CreatureAbilities.Get(id);float h=small.CalcHeight(new GUIContent(ability.description),618);
+                AbilityDefinition ability=CreatureAbilities.Get(id);string description=ArenaDescription.Format(ability.description);float h=small.CalcHeight(new GUIContent(description),618);
                 Panel(new Rect(17,yy,678,66+h),new Color(.11f,.16f,.17f,.95f));ArenaIcons.Draw(new Rect(30,yy+13,31,31),ability.icon??"crystal");Text(new Rect(77,yy+11,590,30),ability.name,label,mint);
-                Text(new Rect(77,yy+49,618,h+3),ability.description,small,white);yy+=81+h;
+                Text(new Rect(77,yy+49,618,h+3),description,small,white);yy+=81+h;
             }
             GUI.EndScrollView();
             Text(new Rect(x+25,y+682,1054,26),CreatureCatalog.Kinds.Length+" 种生物  ·  所有价格与战斗属性由房主服务器确认  ·  鼠标滚轮浏览",micro,muted);
@@ -432,21 +383,21 @@ namespace BlockArena.Runtime
             Panel(new Rect(x,y,712,664),dark);
             Text(new Rect(x+30,y+27,610,44),"你的生物，你的阵形。",heading,mint);
             if(Button(new Rect(x+637,y+25,43,35),"×",new Color(.15f,.24f,.22f),white))app.ShowHelp=false;
-            string[] names={"01  招募与金币","02  装备与永久技能","03  自由布阵与交锋","04  局域网与内网穿透"};
+            string[] names={"01  招募与金币","02  永久技能","03  自由布阵与交锋","04  中央事件与联机"};
             string[] bodies={
-                "开局获得 12 金币。每轮从三只生物中付费招募一只，或跳过保留金币。每轮收入为基础 6 金币，加每次击杀 1 金币及排名奖励。",
-                "按 M 打开或收起商店，拖动标题栏调整位置。选中生物后购买装备，每只最多 3 件；技能永久强化对应类别的现有与未来生物。手动刷新花费 2 金币。",
-                "WASD 或点击地面移动 Steve，拖动生物自由摆位，点击准备开战。战斗自动进行，悬停查看血条、技能与状态；滚轮缩放，战后生物恢复。",
-                "房主本机开服，朋友填写房主的局域网 IPv4 和 TCP 端口。穿透时映射 TCP 7777，朋友填写映射后的域名和外网端口。房主退出即关服。"};
+                "开局 12 金币。每轮收入 6 + min(5, 击杀数) + 名次奖励 4/3/2/2。悬赏另计：每击杀领先者 3 只原始生物得 1 金币，每人每轮最多 3。",
+                "招募页可花 2 金币刷新；军团中可遣散生物，返还实付价格 50%（向下取整，保留至少一只）。免费初始生物不返金币。永久技能商店按 M 打开，技能适用现有及未来生物。",
+                "WASD 或点击地面移动 Steve，拖动生物自由摆位，点击准备开战。悬停即看属性，停留 1 秒展开技能。滚轮缩放；战斗时右侧显示指挥官血条，其余阶段移至右边缘展开。",
+                "每轮可能有中央首领或金币资源，招募后提示本轮事件；首领优先攻击总生命最高军团，击杀方获得额外金币。房主开服后，朋友填写局域网 IP 或 TCP 穿透地址加入。"};
             float yy=y+92;
             for(int i=0;i<names.Length;i++)
             {
                 Text(new Rect(x+32,yy,645,26),names[i],label,mint);
-                float bodyHeight=small.CalcHeight(new GUIContent(bodies[i]),645);
-                Text(new Rect(x+32,yy+32,645,bodyHeight+4),bodies[i],small,white);
+                string body=ArenaDescription.Format(bodies[i]);float bodyHeight=small.CalcHeight(new GUIContent(body),645);
+                Text(new Rect(x+32,yy+32,645,bodyHeight+4),body,small,white);
                 yy+=bodyHeight+58;
             }
-            Text(new Rect(x+32,y+618,645,28),"无需登录或中心服务器 · 军团数量不限 · 装备与技能永久保留",small,muted);
+            Text(new Rect(x+32,y+618,645,28),"无需登录或中心服务器 · 军团数量不限 · 技能永久保留",small,muted);
         }
 
         void Hover()
@@ -464,36 +415,6 @@ namespace BlockArena.Runtime
             Text(new Rect(r.x+20,r.y+13,innerWidth,titleHeight),hoverTitle,heading,white);
             Fill(new Rect(r.x+20,r.y+titleHeight+21,innerWidth,1),copper);
             Text(new Rect(r.x+20,r.y+titleHeight+31,innerWidth,bodyHeight+3),hoverBody,label,muted);
-        }
-        void Inspection()
-        {
-            var d=inspectionDefinition;var f=inspectionFighter;
-            float hp=f==null?d.hp:f.hp,maxHp=f==null?d.hp:f.maxHp;
-            var skills=new List<string>();foreach(string id in (f==null?d.skills:f.skills)??new string[0]){string name=CreatureAbilities.Get(id).name;if(!skills.Contains(name))skills.Add(name);}
-            string skillText=skills.Count==0?"":string.Join(" · ",skills.ToArray());
-            string equipped="";IEnumerable<string> gear=f!=null?(IEnumerable<string>)f.equipment:inspectionUnit==null?null:inspectionUnit.equipment;
-            if(gear!=null)foreach(string id in gear){if(equipped.Length>0)equipped+=" · ";equipped+=TradeCatalog.Get(id).name;}
-            string details=string.IsNullOrEmpty(skillText)?"":"技能："+skillText;
-            if(!string.IsNullOrEmpty(equipped))details+=(details.Length==0?"":"\n")+"装备："+equipped;
-            var states=new List<KeyValuePair<string,string>>();
-            if(f!=null){if(f.shield>0)states.Add(new KeyValuePair<string,string>("shield","护盾 "+Mathf.CeilToInt(f.shield)));if(f.poisonTime>0)states.Add(new KeyValuePair<string,string>("poison","中毒"));if(f.burnTime>0)states.Add(new KeyValuePair<string,string>("fire","燃烧"));if(f.slowTime>0)states.Add(new KeyValuePair<string,string>("frost","减速"));if(f.stunTime>0)states.Add(new KeyValuePair<string,string>("stun","眩晕"));}
-            float stateWidth=0,stateHeight=states.Count==0?0:28;
-            foreach(var state in states){float w=small.CalcSize(new GUIContent(state.Value)).x+34;if(stateWidth+w>358){stateHeight+=30;stateWidth=0;}stateWidth+=w+6;}
-            float detailHeight=details.Length==0?0:small.CalcHeight(new GUIContent(details),354),detailsY=202+stateHeight+(states.Count==0?0:8);Rect r=TooltipRect(398,detailsY+detailHeight+15);
-            Panel(r,new Color(.07f,.11f,.12f,.99f));
-            ArenaIcons.Creature(new Rect(r.x+17,r.y+14,58,58),d.model??d.id,MobColor(d));
-            Text(new Rect(r.x+89,r.y+13,291,36),(f!=null&&f.scale<.9f?"小":"")+d.name,heading,white);
-            Text(new Rect(r.x+89,r.y+52,291,26),(inspectionOwner==null?"":Trim(inspectionOwner.name,8)+" · ")+d.role,small,inspectionOwner==null?muted:Team(inspectionOwner.slot));
-            Fill(new Rect(r.x+20,r.y+92,358,18),new Color(.055f,.07f,.07f));
-            Fill(new Rect(r.x+22,r.y+94,354*Mathf.Clamp01(hp/Mathf.Max(1,maxHp)),14),new Color(.29f,.75f,.45f));
-            Text(new Rect(r.x+20,r.y+88,358,25),Mathf.CeilToInt(hp)+" / "+Mathf.CeilToInt(maxHp),centered,white);
-            Stat(new Rect(r.x+20,r.y+127,172,29),"sword",(f==null?d.attack:f.attack).ToString("0.#"));
-            Stat(new Rect(r.x+208,r.y+127,172,29),"speed",(f==null?d.attackSpeed:f.attackSpeed).ToString("0.##")+" 次/秒");
-            Stat(new Rect(r.x+20,r.y+164,172,29),"range",(f==null?d.range:f.range).ToString("0.#"));
-            Stat(new Rect(r.x+208,r.y+164,172,29),"shield",((f==null?0:f.armor)*100).ToString("0.#")+"% 护甲");
-            float sx=0,sy=0;
-            foreach(var state in states){float w=small.CalcSize(new GUIContent(state.Value)).x+34;if(sx+w>358){sy+=30;sx=0;}ArenaIcons.Draw(new Rect(r.x+20+sx,r.y+205+sy,22,22),state.Key);Text(new Rect(r.x+47+sx,r.y+204+sy,w-26,27),state.Value,small,gold);sx+=w+6;}
-            if(details.Length>0)Text(new Rect(r.x+20,r.y+detailsY,354,detailHeight+3),details,small,muted);
         }
         Rect TooltipRect(float w,float h)
         {
@@ -603,6 +524,8 @@ namespace BlockArena.Runtime
         {
             bool previousEnabled=GUI.enabled;
             if(!drawingAudio&&AudioBlocksUnderlying)GUI.enabled=false;
+            if(!drawingAudio&&!drawingSkills&&SkillBlocksUnderlying)GUI.enabled=false;
+            if(!drawingAudio&&!drawingArmy&&EconomyBlocksUnderlying)GUI.enabled=false;
             bool hovered=GUI.enabled&&r.Contains(Event.current.mousePosition);
             int id=GUIUtility.GetControlID(FocusType.Passive);
             Spring motion;if(!buttonMotion.TryGetValue(id,out motion)){motion=new Spring();buttonMotion.Add(id,motion);}
@@ -637,8 +560,7 @@ namespace BlockArena.Runtime
         {
             ArenaIcons.Draw(new Rect(r.x,r.y,25,25),icon);Text(new Rect(r.x+33,r.y-1,Mathf.Max(30,r.width-31),r.height),text,label,white);
         }
-        Vector2 Mouse(){return new Vector2(Input.mousePosition.x/scale,(Screen.height-Input.mousePosition.y)/scale);}
-        UnitState SelectedUnit(){return app.Me==null||string.IsNullOrEmpty(app.SelectedId)?null:app.Me.units.Find(u=>u.id==app.SelectedId);}
+        Vector2 Mouse(){Vector2 p=HudPointer;return new Vector2(p.x/scale,(Screen.height-p.y)/scale);}
         Color MobColor(CreatureDefinition definition){Color c;return ColorUtility.TryParseHtmlString(definition.color,out c)?c:mint;}
         static string Compact(string value,int count)
         {

@@ -282,12 +282,28 @@ def effect(name):
         "commander_hit": .70, "victory": 2.8, "defeat": 2.6,
         "combat_arrow": .23, "combat_hit": .20, "combat_explode": .48,
         "combat_death": .42, "combat_heal": .58, "error": .32,
+        "countdown": .28, "countdown_urgent": .38,
+        "execution_charge": .90, "execution_hit": 1.15,
     }
     mix = Mix(lengths[name])
     seed = sum(map(ord, name))
     if name == "click":
         mix.note(84, 0, .10, .85, "pluck")
         mix.note(91, .025, .09, .22, "glass")
+    elif name in ("countdown", "countdown_urgent"):
+        mix.note(86 if name == "countdown" else 93, 0, .20, .65, "glass")
+        if name == "countdown_urgent":
+            mix.note(98, .11, .21, .45, "pluck")
+    elif name == "execution_charge":
+        mix.add(texture(.85, "charge", seed), 0, .68)
+        for index, pitch in enumerate((62, 65, 68, 74, 86)):
+            mix.note(pitch, index * .12, .38, .28, "glass", (index - 2) * .09)
+    elif name == "execution_hit":
+        mix.add(texture(.65, "hit", seed), 0, .65)
+        mix.note(26, 0, .66, .60, "bass")
+        mix.add(texture(.48, "stone", seed + 1), .02, .27)
+        for index, pitch in enumerate((98, 93, 86, 81)):
+            mix.note(pitch, .06 + index * .13, .52, .32, "glass", (index - 1.5) * .17)
     elif name in ("purchase", "coin", "recruit"):
         notes = [74, 81, 86] if name != "recruit" else [69, 74, 77, 81]
         spacing = .085 if name != "recruit" else .13
@@ -389,7 +405,8 @@ def main():
         print(json.dumps(measurement), flush=True)
     for name in ("click", "purchase", "coin", "pickup", "place", "recruit", "battle_start", "attack",
                  "ritual_rise", "ritual_charge", "ritual_launch", "commander_hit", "victory", "defeat",
-                 "combat_arrow", "combat_hit", "combat_explode", "combat_death", "combat_heal", "error"):
+                 "combat_arrow", "combat_hit", "combat_explode", "combat_death", "combat_heal", "error",
+                 "countdown", "countdown_urgent", "execution_charge", "execution_hit"):
         path = output / (name + ".wav")
         measurement = effect(name).export(path, .48)
         audio_meta(path, False)

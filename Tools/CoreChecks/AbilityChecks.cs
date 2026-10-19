@@ -209,7 +209,7 @@ internal static partial class Program
             Equal(1, game.State.players[1].roundKills); Equal(1, game.State.players[1].totalKills);
         });
 
-        Check("magma split children inherit equipment and permanent skills but cannot split again", () =>
+        Check("magma split children inherit permanent skills, ignore retired equipment and cannot split again", () =>
         {
             var game = Two();
             game.State.players[0].units = new List<UnitState> { new UnitState { id = "split-killer", kind = "iron_golem", x = 0 } };
@@ -222,7 +222,7 @@ internal static partial class Program
             foreach (var child in children)
             {
                 Assert(child.mini && child.summoned && child.ownerId == owner.id); Near(.62f, child.scale);
-                Near(68, child.maxHp); Near(16, child.attack); Near(.28f, child.armor); Equal(2, child.equipment.Length);
+                Near(20, child.maxHp); Near(12, child.attack); Near(.1f, child.armor); Equal(0, child.equipment.Length);
                 Assert(child.skills.Contains("magma_cube_split") && child.skills.Contains("magma_cube_burn"));
                 child.hp = 1; child.attackCooldown = 1000; child.speed = 0;
             }

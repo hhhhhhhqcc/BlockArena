@@ -1,15 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace BlockArena.Core
 {
     /// <summary>Dependency-free authoritative rules, shared by the host and rule checks.</summary>
-    public sealed class ArenaGame
+    public sealed partial class ArenaGame
     {
         public const float RecruitSeconds = 25f, PrepSeconds = 45f, BattleSeconds = 55f, ResultsSeconds = 6f;
         public GameState State { get; private set; }
+        public int Seed { get; private set; }
         private readonly Random random;
         private int nextId;
         private float clock, readyElapsed;
@@ -18,12 +20,20 @@ namespace BlockArena.Core
         private readonly List<string> participants = new List<string>();
         private sealed class DefeatGroup { public List<string> ids = new List<string>(); public float score; }
 
-        public ArenaGame(string hostId, string hostName, int seed = 0)
+        public ArenaGame(string hostId, string hostName, int? seed = null)
         {
             if (String.IsNullOrWhiteSpace(hostId)) Fail("玩家身份无效");
-            random = new Random(seed);
+            Seed = seed ?? NewSeed();
+            random = new Random(Seed);
             State = new GameState { hostId = hostId, message = "等待冒险家加入" };
             State.players.Add(MakePlayer(hostId, hostName, 0, false));
+        }
+
+        private static int NewSeed()
+        {
+            byte[] bytes = new byte[4];
+            using (RandomNumberGenerator generator = RandomNumberGenerator.Create()) generator.GetBytes(bytes);
+            return BitConverter.ToInt32(bytes, 0);
         }
 
         public void AddPlayer(string id, string name, bool bot = false)
@@ -89,11 +99,14 @@ namespace BlockArena.Core
             {
                 if (State.phase != "recruit") Fail("请在招募阶段选择生物");
                 if (!p.recruitPending) Fail("本轮已经完成招募");
+                ValidateRecruitOffer(p, command.offerId);
                 if (command.index < 0 || command.index > 2 || p.shop == null || p.shop.Length != 3) Fail("招募位置无效");
                 CreatureCatalog.Get(p.shop[command.index]);
                 Choose(p, command.index);
                 return;
             }
+            if (type == "recruit_refresh") { RefreshRecruits(p, command.offerId); return; }
+            if (type == "dismiss") { Dismiss(p, command.unitId); return; }
             if (type == "skip")
             {
                 if (State.phase != "recruit" || !p.recruitPending) Fail("当前没有待完成的招募");
@@ -104,6 +117,7 @@ namespace BlockArena.Core
                 if ((State.phase != "prep" && State.phase != "recruit") || p.recruitPending) Fail("请在准备阶段购买");
                 if (type == "refresh")
                 {
+                    if (TradeCatalog.AvailableSkills(p).Length == 0) Fail("所有永久技能均已掌握，无需刷新");
                     if (p.gold < TradeCatalog.RefreshPrice) Fail("金币不足，刷新需要 2 金币");
                     p.gold -= TradeCatalog.RefreshPrice; RefreshMarket(p); p.ready = false;
                 }
@@ -221,14 +235,12 @@ namespace BlockArena.Core
         private void RefreshMarket(PlayerState p)
         {
             p.market.Clear(); p.shopRefreshLeft = 0;
-            var equipment = TradeCatalog.Ids.Where(id => TradeCatalog.Get(id).type == "equipment").ToList();
-            var skills = TradeCatalog.Ids.Where(id => TradeCatalog.Get(id).type == "skill" && !p.upgrades.Contains(id)).ToList();
-            for (int i = 0; i < 4; i++)
+            var skills = TradeCatalog.AvailableSkills(p).ToList();
+            for (int i = 0; i < TradeCatalog.MarketSlots && skills.Count > 0; i++)
             {
-                var pool = i < 2 || skills.Count == 0 ? equipment : skills;
-                var candidates = i == 0 ? pool.Where(id => TradeCatalog.Get(id).price <= Math.Max(6, p.gold / 2)).ToList() : pool;
-                if (candidates.Count == 0) candidates = pool;
-                string id = candidates[random.Next(candidates.Count)]; pool.Remove(id);
+                var candidates = i == 0 ? skills.Where(id => TradeCatalog.Get(id).price <= p.gold).ToList() : skills;
+                if (candidates.Count == 0) candidates = skills;
+                string id = candidates[random.Next(candidates.Count)]; skills.Remove(id);
                 TradeDefinition item = TradeCatalog.Get(id);
                 p.market.Add(new ShopOffer { id = Id("offer"), kind = item.type, itemId = id, price = item.price });
             }
@@ -238,21 +250,11 @@ namespace BlockArena.Core
             ShopOffer offer = p.market.Find(o => o.id == command.offerId);
             if (offer == null || offer.sold) Fail("该商品已经售出或商店已刷新");
             TradeDefinition item = TradeCatalog.Get(offer.itemId);
+            if (offer.kind != "skill" || item.type != "skill") Fail("商店仅提供永久技能");
+            if (p.upgrades.Contains(item.id)) Fail("你已经学习了此技能");
             if (p.gold < item.price) Fail("金币不足");
-            if (item.type == "equipment")
-            {
-                UnitState unit = p.units.Find(u => u.id == command.unitId);
-                if (unit == null) Fail("请先选中自己拥有的生物作为装备目标");
-                if (unit.equipment.Count >= TradeCatalog.EquipmentSlots) Fail("该生物的三个装备槽已满");
-                if (unit.equipment.Contains(item.id)) Fail("该生物已经装备了此物品");
-                unit.equipment.Add(item.id);
-            }
-            else
-            {
-                if (p.upgrades.Contains(item.id)) Fail("你已经学习了此技能");
-                p.upgrades.Add(item.id);
-            }
-            p.gold -= item.price; offer.sold = true; p.ready = false;
+            p.upgrades.Add(item.id);
+            p.gold -= item.price; p.market.Remove(offer); p.ready = false;
         }
         private UnitState AddUnit(PlayerState p, string kind, Point2? position = null)
         {
@@ -282,27 +284,29 @@ namespace BlockArena.Core
                 State.players.Add(MakePlayer(id, CreatureCatalog.TeamNames[slot] + "守卫", slot, true));
             }
             State.round = 0; State.winnerId = null;
+            State.leaderId = null; State.roundEvent = null;
             foreach (PlayerState p in State.players)
-            { p.hp = 20; p.eliminated = false; p.gold = 12; p.roundKills = p.totalKills = p.lastIncome = p.killIncome = p.rankIncome = p.baseIncome = p.lastRank = 0; p.upgrades.Clear(); }
+            { p.hp = 20; p.eliminated = false; p.gold = 12; p.roundKills = p.totalKills = p.lastIncome = p.killIncome = p.rankIncome = p.baseIncome = p.lastRank = 0; p.bountyKills = p.bountyIncome = p.eventIncome = 0; p.recruitOfferId = null; p.upgrades.Clear(); }
             BeginRecruit(true);
         }
         private void BeginRecruit(bool first)
         {
             State.round++; State.phase = "recruit"; State.timeLeft = RecruitSeconds;
             State.fighters.Clear(); State.effects.Clear(); State.placements.Clear(); defeats.Clear(); readyElapsed = 0;
+            State.leaderId = null; AnnounceRoundEvent();
             State.message = "金币招募 · 每轮最多购买一只，也可以保留金币跳过";
             foreach (PlayerState p in State.players)
             {
                 p.ready = false; p.moveUntil = 0; p.recruitChoice = null; p.recruitPending = !p.eliminated;
                 p.steve = LocalToWorld(p.slot, 0, 390);
-                if (p.eliminated) { p.shop = new string[0]; p.market.Clear(); continue; }
+                if (p.eliminated) { p.shop = new string[0]; p.recruitOfferId = null; p.market.Clear(); continue; }
                 if (first)
                 {
                     p.hp = 20; p.units.Clear();
                     AddUnit(p, "zombie", LocalToWorld(p.slot, -24, 210));
                     AddUnit(p, "skeleton", LocalToWorld(p.slot, 24, 305));
                 }
-                p.shop = RollShop(); RefreshMarket(p); p.botAt = clock + 1 + Rng() * 1.2f;
+                p.shop = RollShop(); p.recruitOfferId = Id("recruit"); RefreshMarket(p); p.botAt = clock + 1 + Rng() * 1.2f;
             }
         }
         private void BeginPrep()
@@ -315,7 +319,7 @@ namespace BlockArena.Core
         {
             string kind = p.shop[index]; int price = CreatureCatalog.Get(kind).price;
             if (p.gold < price) Fail("金币不足，可以跳过招募并保留金币");
-            p.gold -= price; AddUnit(p, kind); p.recruitChoice = kind;
+            p.gold -= price; AddUnit(p, kind).paidPrice = price; p.recruitChoice = kind;
             FinishRecruit(p);
         }
         private void FinishRecruit(PlayerState p)
@@ -335,11 +339,9 @@ namespace BlockArena.Core
             foreach (ShopOffer offer in p.market.ToArray())
             {
                 if (offer.sold || p.gold < offer.price || p.gold < 4) continue;
-                var unit = p.units.FirstOrDefault(u => u.equipment.Count < TradeCatalog.EquipmentSlots && !u.equipment.Contains(offer.itemId));
-                if (offer.kind == "skill" && p.upgrades.Contains(offer.itemId)) continue;
-                if (offer.kind == "skill" && !p.units.Any(u => TradeCatalog.Applies(TradeCatalog.Get(offer.itemId), CreatureCatalog.Get(u.kind)))) continue;
-                if (offer.kind == "equipment" && unit == null) continue;
-                Purchase(p, new GameCommand { offerId = offer.id, unitId = unit == null ? null : unit.id });
+                if (offer.kind != "skill" || p.upgrades.Contains(offer.itemId)) continue;
+                if (!p.units.Any(u => TradeCatalog.Applies(TradeCatalog.Get(offer.itemId), CreatureCatalog.Get(u.kind)))) continue;
+                Purchase(p, new GameCommand { offerId = offer.id });
             }
             for (int i = 0; i < p.units.Count; i++)
             {
@@ -366,10 +368,9 @@ namespace BlockArena.Core
                 x = u.x, y = u.y, hp = mini ? 20 : c.hp, maxHp = mini ? 20 : c.hp, attack = mini ? 4 : c.attack,
                 attackSpeed = mini ? 1.1f : c.attackSpeed, range = mini ? 22 : c.range, speed = mini ? 48 : c.speed,
                 scale = mini ? .62f : 1, mini = mini, summoned = mini,
-                radius = (c.tier >= 6 ? 28 : c.model == "golem" || u.kind == "golem" ? 20 : c.model == "spider" ? 13 : 15) * (mini ? .62f : 1),
-                equipment = u.equipment.ToArray() };
+                radius = (c.tier >= 6 ? 28 : c.model == "golem" || u.kind == "golem" ? 20 : c.model == "spider" ? 13 : 15) * (mini ? .62f : 1) };
             List<string> skills = new List<string>(c.skills);
-            foreach (string id in u.equipment.Concat(p.upgrades))
+            foreach (string id in p.upgrades)
             {
                 TradeDefinition item = TradeCatalog.Get(id);
                 if (!TradeCatalog.Applies(item, c)) continue;
@@ -388,9 +389,11 @@ namespace BlockArena.Core
             foreach (PlayerState p in Living())
             {
                 participants.Add(p.id);
-                p.roundKills = 0;
+                p.roundKills = p.killIncome = p.bountyKills = p.bountyIncome = p.eventIncome = 0;
                 foreach (UnitState u in p.units) State.fighters.Add(NewFighter(p, u));
             }
+            State.leaderId = SelectBattleLeader();
+            SpawnRoundEvent();
         }
         private void Effect(string type, float x, float y, int slot, float value = 0, float tx = 0, float ty = 0)
         {
@@ -401,18 +404,16 @@ namespace BlockArena.Core
         {
             if (f.dead) return;
             f.dead = true; f.hp = 0; Effect("death", f.x, f.y, f.slot);
-            CreatureAbilities.OnDeath(f, State.fighters, Damage, AbilityEffect, Summon);
+            if (!f.neutral) CreatureAbilities.OnDeath(f, State.fighters, Damage, AbilityEffect, Summon);
         }
         private void Summon(FighterState source, string kind, int count)
         {
-            if (source.summoned) return;
+            if (source.summoned || source.neutral) return;
             PlayerState p = Player(source.ownerId);
-            UnitState original = p.units.Find(u => u.id == source.unitId);
             for (int i = 0; i < Math.Min(3, count); i++)
             {
                 bool mini = kind == source.kind && (kind == "slime" || kind == "magma_cube");
                 var unit = new UnitState { id = source.unitId, kind = kind, x = Clamp(source.x + (i - (count - 1) * .5f) * 24, -410, 410), y = source.y };
-                if (mini && original != null) unit.equipment.AddRange(original.equipment);
                 FighterState child = NewFighter(p, unit, mini); child.summoned = true;
                 if (!mini) { child.scale *= .8f; child.hp = child.maxHp *= .65f; }
                 State.fighters.Add(child); Effect("spawn", child.x, child.y, child.slot);
@@ -434,8 +435,7 @@ namespace BlockArena.Core
                 Effect("hit", target.x, target.y, attacker == null ? target.slot : attacker.slot, (float)Math.Floor(actual + .5f));
                 if (target.hp <= 0)
                 {
-                    if (!target.summoned && attacker != null && attacker.ownerId != target.ownerId)
-                    { PlayerState killer = Player(attacker.ownerId); killer.roundKills++; killer.totalKills++; killer.gold++; }
+                    RewardDefeat(target, attacker);
                     Kill(target);
                 }
                 if (damageDepth == 1) CreatureAbilities.AfterDamage(target, actual, attacker, Damage, AbilityEffect);
@@ -445,9 +445,11 @@ namespace BlockArena.Core
         private FighterState ChooseTarget(FighterState f)
         {
             FighterState chosen = null; float best = Single.PositiveInfinity;
+            string bossTarget = f.neutral ? BossTargetOwner() : null;
             foreach (FighterState other in State.fighters)
             {
                 if (other.dead || other.ownerId == f.ownerId) continue;
+                if (f.neutral && (other.neutral || other.ownerId != bossTarget)) continue;
                 float score = Distance(f, other);
                 if (f.kind == "spider" && other.kind == "skeleton") score *= .64f;
                 if (score < best) { best = score; chosen = other; }
@@ -504,11 +506,13 @@ namespace BlockArena.Core
             {
                 if (f.dead) continue;
                 f.attackTime = Math.Max(0, f.attackTime - dt); f.attackCooldown = Math.Max(0, f.attackCooldown - dt); f.think -= dt;
+                // The gold resource has no spawn bonuses or attacks, but existing poison/burn still expire and deal damage.
                 CreatureAbilities.Tick(f, State.fighters, dt, Damage, AbilityEffect);
                 if (f.dead || f.stunTime > 0) continue;
+                if (f.neutral && f.attack <= 0) continue;
                 FighterState target = null;
                 if (f.targetId != null) byId.TryGetValue(f.targetId, out target);
-                if (target == null || target.dead || f.think <= 0) target = ChooseTarget(f);
+                if (target == null || target.dead || f.think <= 0 || f.neutral) target = ChooseTarget(f);
                 if (target == null) continue;
                 float dist = Distance(f, target), range = f.range + (f.range > 70 ? 0 : target.radius * .55f);
                 if (dist <= range && f.attackCooldown <= 0) Attack(f, target);
@@ -524,7 +528,8 @@ namespace BlockArena.Core
                 if (velocity > limit) { vx *= limit / velocity; vy *= limit / velocity; }
                 f.x = Clamp(f.x + vx * dt, -410, 410); f.y = Clamp(f.y + vy * dt, -410, 410);
             }
-            HashSet<string> alive = new HashSet<string>(State.fighters.Where(f => !f.dead).Select(f => f.ownerId));
+            UpdateRoundEvent();
+            HashSet<string> alive = new HashSet<string>(State.fighters.Where(f => !f.dead && !f.neutral && participants.Contains(f.ownerId)).Select(f => f.ownerId));
             HashSet<string> already = new HashSet<string>(defeats.SelectMany(g => g.ids));
             List<string> newlyDefeated = participants.Where(id => !alive.Contains(id) && !already.Contains(id)).ToList();
             if (newlyDefeated.Count > 0) defeats.Add(new DefeatGroup { ids = newlyDefeated });
@@ -535,7 +540,7 @@ namespace BlockArena.Core
             Dictionary<string, float> totals = new Dictionary<string, float>();
             foreach (FighterState f in State.fighters)
             {
-                if (f.dead) continue;
+                if (f.dead || f.neutral || !participants.Contains(f.ownerId)) continue;
                 if (!totals.ContainsKey(f.ownerId)) totals.Add(f.ownerId, 0);
                 totals[f.ownerId] += f.hp;
             }
@@ -559,28 +564,32 @@ namespace BlockArena.Core
                 {
                     PlayerState p = Player(id); int amount = baseDamage == 0 ? 0 : baseDamage + lateDamage;
                     p.hp = Math.Max(0, p.hp - amount); p.eliminated = p.hp == 0; p.ready = false;
-                    p.lastRank = rank; p.baseIncome = 6; p.killIncome = p.roundKills; p.rankIncome = Math.Max(1, 5 - rank);
+                    p.lastRank = rank; p.baseIncome = 6; p.killIncome = Math.Min(KillIncomeCap, p.roundKills); p.rankIncome = RankReward(rank);
                     // Kill gold was credited at the lethal hit; the summary still describes the whole round.
-                    p.lastIncome = p.baseIncome + p.killIncome + p.rankIncome; p.gold += p.baseIncome + p.rankIncome;
+                    p.lastIncome = p.baseIncome + p.killIncome + p.rankIncome + p.bountyIncome + p.eventIncome; p.gold += p.baseIncome + p.rankIncome;
                     State.placements.Add(new PlacementState { playerId = id, rank = rank, damage = amount, kills = p.roundKills,
-                        income = p.lastIncome, baseIncome = p.baseIncome, killIncome = p.killIncome, rankIncome = p.rankIncome });
+                        income = p.lastIncome, baseIncome = p.baseIncome, killIncome = p.killIncome, rankIncome = p.rankIncome,
+                        bountyKills = p.bountyKills, bountyIncome = p.bountyIncome, eventIncome = p.eventIncome });
                 }
                 rank += group.ids.Count;
             }
-            State.phase = "results"; State.timeLeft = ResultsSeconds;
+            State.phase = "results";
+            if (State.roundEvent != null) State.roundEvent.active = false;
+            State.timeLeft = Math.Max(ResultsSeconds, CommanderRitualTimeline.DurationFor(State) + CommanderRitualTimeline.NetworkMarginSeconds);
             if (groups.Count > 0)
                 State.message = groups[0].ids.Count > 1 ? "本轮并列，各扣 " + State.placements[0].damage + " 点生命" : Player(groups[0].ids[0]).name + "赢下本轮";
             List<PlayerState> remaining = Living();
             if (remaining.Count <= 1)
             {
-                State.phase = "finished"; State.timeLeft = 0; State.winnerId = remaining.Count == 1 ? remaining[0].id : null;
+                State.phase = "finished"; State.winnerId = remaining.Count == 1 ? remaining[0].id : null;
                 State.message = remaining.Count == 1 ? remaining[0].name + "成为斗兽场冠军" : "所有军团同时倒下，本场平局";
             }
         }
 
         public GameState SnapshotFor(string playerId)
         {
-            GameState copy = new GameState { hostId = State.hostId, phase = State.phase, winnerId = State.winnerId, message = State.message, round = State.round,
+            GameState copy = new GameState { hostId = State.hostId, phase = State.phase, winnerId = State.winnerId, message = State.message, round = State.round, leaderId = State.leaderId,
+                roundEvent = CopyRoundEvent(State.roundEvent),
                 timeLeft = State.phase == "prep" && readyElapsed > 0 ? Math.Min(State.timeLeft, Math.Max(0, 1 - readyElapsed)) : State.timeLeft };
             foreach (PlayerState p in State.players)
             {
@@ -588,21 +597,24 @@ namespace BlockArena.Core
                     eliminated = p.eliminated, recruitPending = p.recruitPending, recruitChoice = p.recruitChoice, steve = p.steve,
                     gold = p.gold, roundKills = p.roundKills, totalKills = p.totalKills, lastIncome = p.lastIncome, killIncome = p.killIncome,
                     rankIncome = p.rankIncome, baseIncome = p.baseIncome, lastRank = p.lastRank, shopRefreshLeft = p.id == playerId ? p.shopRefreshLeft : 0,
+                    bountyKills = p.bountyKills, bountyIncome = p.bountyIncome, eventIncome = p.eventIncome,
+                    recruitOfferId = p.id == playerId ? p.recruitOfferId : null,
                     shop = p.id == playerId ? (string[])p.shop.Clone() : null };
                 player.upgrades.AddRange(p.upgrades);
                 if (p.id == playerId) foreach (ShopOffer offer in p.market) player.market.Add(new ShopOffer { id = offer.id, kind = offer.kind, itemId = offer.itemId, price = offer.price, sold = offer.sold });
-                foreach (UnitState u in p.units) player.units.Add(new UnitState { id = u.id, kind = u.kind, x = u.x, y = u.y, placementId = u.placementId, equipment = new List<string>(u.equipment) });
+                foreach (UnitState u in p.units) player.units.Add(new UnitState { id = u.id, kind = u.kind, x = u.x, y = u.y, placementId = u.placementId, paidPrice = u.paidPrice });
                 copy.players.Add(player);
             }
             foreach (FighterState f in State.fighters) copy.fighters.Add(new FighterState { id = f.id, unitId = f.unitId, ownerId = f.ownerId, kind = f.kind, slot = f.slot,
-                x = f.x, y = f.y, hp = f.hp, maxHp = f.maxHp, scale = f.scale, attackTime = f.attackTime, dead = f.dead,
+                x = f.x, y = f.y, hp = f.hp, maxHp = f.maxHp, scale = f.scale, attackTime = f.attackTime, dead = f.dead, neutral = f.neutral,
                 attack = f.attack, attackSpeed = f.attackSpeed, range = f.range, speed = f.speed,
-                skills = (string[])f.skills.Clone(), equipment = (string[])f.equipment.Clone(), armor = f.armor, shield = f.shield,
+                skills = (string[])f.skills.Clone(), armor = f.armor, shield = f.shield,
                 poisonTime = f.poisonTime, burnTime = f.burnTime, slowTime = f.slowTime, stunTime = f.stunTime, summoned = f.summoned });
             foreach (EffectState e in State.effects) copy.effects.Add(new EffectState { id = e.id, type = e.type, x = e.x, y = e.y, age = e.age,
                 targetX = e.targetX, targetY = e.targetY, slot = e.slot, value = e.value });
             foreach (PlacementState p in State.placements) copy.placements.Add(new PlacementState { playerId = p.playerId, rank = p.rank, damage = p.damage,
-                kills = p.kills, income = p.income, baseIncome = p.baseIncome, killIncome = p.killIncome, rankIncome = p.rankIncome });
+                kills = p.kills, income = p.income, baseIncome = p.baseIncome, killIncome = p.killIncome, rankIncome = p.rankIncome,
+                bountyKills = p.bountyKills, bountyIncome = p.bountyIncome, eventIncome = p.eventIncome });
             return copy;
         }
     }

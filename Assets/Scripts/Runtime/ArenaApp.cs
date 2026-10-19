@@ -11,7 +11,7 @@ namespace BlockArena.Runtime
     public sealed class ArenaApp : MonoBehaviour
     {
         public static ArenaApp Instance { get; private set; }
-        public GameState State { get { return client != null ? client.State : null; } }
+        public GameState State { get { return VerificationInput && VerificationState != null ? VerificationState : client != null ? client.State : null; } }
         public PlayerState Me
         {
             get
@@ -46,6 +46,7 @@ namespace BlockArena.Runtime
         internal ArenaHud Hud { get { return hud; } }
         internal Texture2D VerifyCursor() { return pointer.VerifyAndCreatePreview(); }
         readonly PlacementPreview placements = new PlacementPreview();
+        readonly ArenaCountdown countdown = new ArenaCountdown();
         GameState previous;
         string dragId, notice = "", lastNetworkError;
         Vector2 dragStart;
@@ -59,6 +60,7 @@ namespace BlockArena.Runtime
         internal float SnapshotPauseUntil;
         internal Vector2? VerificationPointer;
         internal bool VerificationInput;
+        internal GameState VerificationState;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         static void Bootstrap()
@@ -186,6 +188,7 @@ namespace BlockArena.Runtime
             placements.Clear(); CancelDragging(); lastErrorVersion = 0;
             previous = null; SelectedId = null;
             outcomeSound = null;
+            countdown.Reset();
             if (hud != null) hud.ObserveState(null, null);
             if (World != null) World.Clear();
             string token = client.ResumeToken;
@@ -211,6 +214,7 @@ namespace BlockArena.Runtime
             if (server != null) { server.Dispose(); server = null; }
             previous = null; quickStart = false; lastNetworkError = null;
             outcomeSound = null;
+            countdown.Reset();
             if (Sound != null) Sound.SetPhase("menu");
             if (hud != null) hud.ObserveState(null, null);
             placements.Clear(); CancelDragging(); lastErrorVersion = 0;
@@ -232,6 +236,8 @@ namespace BlockArena.Runtime
             if (!VerificationInput && Input.GetKeyDown(KeyCode.Escape))
             {
                 if (hud.ShowAudio) hud.ShowAudio = false;
+                else if (hud.HasSkillDetails) hud.CloseSkillDetails();
+                else if (hud.ShowOwnedSkills) hud.ShowOwnedSkills = false;
                 else if (ShowHelp) ShowHelp = false;
                 else if (ShowBestiary) ShowBestiary = false;
                 else if (ShowShop) ShowShop = false;
@@ -283,6 +289,7 @@ namespace BlockArena.Runtime
             }
             if (!Connected) placements.Clear();
             else if (placements.Reconcile(Me, Time.unscaledTime)) Notify("摆位确认超时，已同步服务器位置。");
+            if (Me != null && SelectedId != null && !Me.units.Exists(u => u.id == SelectedId)) { SelectedId = null; CancelDragging(); }
             if (!CanPrepare || ShowRoom || ShowHelp || ShowBestiary || hud.PointerCaptured)
             {
                 CancelDragging();
@@ -298,6 +305,7 @@ namespace BlockArena.Runtime
                 HandleMovement();
             }
             World.SetSelectedUnit(SelectedId);
+            World.SetSkillHighlight(hud.HighlightedSkillId, PlayerId);
             if (outcomeSound != null && Time.unscaledTime >= outcomeSoundAt && (World == null || !World.RitualActive))
             {
                 if (Sound != null) Sound.Play(outcomeSound, Vector3.zero, 1);
@@ -323,7 +331,9 @@ namespace BlockArena.Runtime
         static bool IsPlacementPhase(string phase) { return phase == "prep" || phase == "recruit"; }
         void ObserveAudio(GameState before, GameState next)
         {
+            int warningSecond = countdown.Observe(next, PlayerId);
             if (Sound == null) return;
+            if (warningSecond > 0) Sound.Play(warningSecond <= 3 ? "countdown_urgent" : "countdown", Vector3.zero, .8f);
             if (next.phase != "finished") outcomeSound = null;
             Sound.SetPhase(next.phase);
             if (before == null) return;
@@ -342,6 +352,7 @@ namespace BlockArena.Runtime
                 Sound.Play("coin", Vector3.zero, .65f);
         }
         Point2? PreviewPosition(string unitId) { Point2 position; return placements.TryGet(unitId, out position) ? (Point2?)position : null; }
+        internal bool PlacementDragging { get { return dragId != null; } }
         void CancelDragging() { dragId = null; if (World != null) World.SetDrag(null, null); }
 
         // Both physical mouse input and the opt-in native smoke driver use the same drag path.

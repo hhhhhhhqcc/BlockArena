@@ -149,6 +149,7 @@ namespace BlockArena.Presentation
             teamRingMesh = teamRing.GetComponent<MeshFilter>();
             selection = VoxelAssets.Part(transform, "Selection", VoxelAssets.SelectionRing(), new Vector3(0, .04f, 0), VoxelAssets.Glow, false);
             selection.gameObject.SetActive(false);
+            BuildSkillFeedback();
             float footprint = Mathf.Clamp(modelFootprint / .57f, .6f, 2.8f);
             teamRing.localScale = new Vector3(footprint, 1, footprint);
             selection.localScale = new Vector3(footprint, 1, footprint);
@@ -552,6 +553,8 @@ namespace BlockArena.Presentation
             Dead = false; deathProgress = 0; Attack = 0; movementBlend = 0; Seen = true;
             hovered = false; healthColor = -1;
             LocalCommander=false;wasDragging=false;selectionAmount=selectionVelocity=dragAmount=dragVelocity=0;landingAge=impactAge=10;
+            ResetExtraFeedback();
+            ResetArenaEventFeedback();
             SetCommanderFlash(false);
             teamRingMesh.sharedMesh = VoxelAssets.TeamRing(slot);
             healthRoot.gameObject.SetActive(false);
@@ -562,6 +565,8 @@ namespace BlockArena.Presentation
         void OnDisable()
         {
             hovered = false;
+            ResetArenaEventFeedback();
+            SetSkillHighlighted(false);executionPlaying=false;
             SetCommanderFlash(false);
             if (healthRoot != null) healthRoot.gameObject.SetActive(false);
         }
@@ -572,7 +577,8 @@ namespace BlockArena.Presentation
         }
         public void CancelDefeatImpact()
         {
-            impactAge=10;SetCommanderFlash(false);
+            impactAge=10;SetCommanderFlash(false);executionPlaying=false;
+            if(figure!=null)figure.gameObject.SetActive(!commanderEliminated);
         }
         void SetCommanderFlash(bool visible)
         {
@@ -680,14 +686,17 @@ namespace BlockArena.Presentation
                 if(head!=null)head.localRotation*=Quaternion.Euler(-jump*15,0,0);
             }
             SetCommanderFlash(Kind=="steve"&&impactAge<.34f&&(impactAge<.13f||impactAge>.22f));
+            StepExecution(time);
             float footprint=Mathf.Clamp(modelFootprint/.57f,.6f,2.8f);
             float ringSize=footprint*(.82f+Mathf.Clamp(selectionAmount,0,1.3f)*.2f+dragAmount*.13f);
             selection.localScale=new Vector3(ringSize,1,ringSize);
             selection.localPosition=new Vector3(0,.04f+dragAmount*.012f,0);
-            selection.gameObject.SetActive(!Dead&&selectionAmount>.02f);
+            bool visibleCommander=Kind!="steve"||figure.gameObject.activeSelf;
+            selection.gameObject.SetActive(!Dead&&visibleCommander&&selectionAmount>.02f);
             float teamSize=footprint*(Kind=="steve"&&LocalCommander?1.2f:1);
             teamRing.localScale=new Vector3(teamSize,1,teamSize);
-            teamRing.gameObject.SetActive(!Dead);
+            teamRing.gameObject.SetActive(!Dead&&visibleCommander);
+            StepSkillFeedback(time,footprint);
             bool showHealth = Battle && hovered && !Dead && Kind != "steve";
             healthRoot.gameObject.SetActive(showHealth);
             if (showHealth && camera != null)
@@ -700,6 +709,7 @@ namespace BlockArena.Presentation
                 int color = amount > .55f ? 0 : amount > .25f ? 1 : 2;
                 if (color != healthColor) { healthFillMesh.sharedMesh = color == 0 ? healthyMesh : color == 1 ? woundedMesh : criticalMesh; healthColor = color; }
             }
+            StepArenaEventFeedback(time);
         }
     }
 }
