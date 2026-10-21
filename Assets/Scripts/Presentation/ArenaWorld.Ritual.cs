@@ -221,8 +221,8 @@ namespace BlockArena.Presentation
         {
             // Save the freshly computed base, never the previous frame's shaken transform.
             cameraBasePosition=viewCamera.transform.position;cameraBaseRotation=viewCamera.transform.rotation;cameraBaseValid=true;
-            float amplitude=CameraShakeStrength;if(amplitude<=0)return;
-            float age=Time.unscaledTime-shakeStartedAt;
+            float amplitude=Mathf.Max(CameraShakeStrength,FieldGenerationShakeStrength);if(amplitude<=0)return;
+            float age=CameraShakeStrength>=FieldGenerationShakeStrength?Time.unscaledTime-shakeStartedAt:Time.unscaledTime;
             Vector3 jitter=new Vector3(Mathf.Sin(age*137),Mathf.Sin(age*173+.7f)*.65f,0)*amplitude;
             viewCamera.transform.position=cameraBasePosition+cameraBaseRotation*jitter;
             viewCamera.transform.rotation=cameraBaseRotation*Quaternion.Euler(0,0,Mathf.Sin(age*109)*amplitude*1.9f);

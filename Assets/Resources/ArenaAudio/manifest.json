@@ -60,20 +60,20 @@
     },
     {
       "file": "click.wav",
-      "duration_seconds": 0.15,
+      "duration_seconds": 0.105,
       "sample_rate": 24000,
       "channels": 2,
       "sample_bits": 16,
       "peak": 0.4799805,
-      "rms": 0.0891859,
+      "rms": 0.1060395,
       "peak_dbfs": -6.376,
-      "rms_dbfs": -20.994,
+      "rms_dbfs": -19.491,
       "clipped_samples": 0,
       "loop": false,
       "loop_boundary_delta": 0.0,
-      "first_neighbor_delta": 3.05e-05,
-      "bytes": 14444,
-      "sha256": "04695cef4d06f25e0d2f7f263b80ac8dfe74ecd632591da4db0b1cc5ce480291"
+      "first_neighbor_delta": 9.16e-05,
+      "bytes": 10124,
+      "sha256": "b5ca0ff1753dc7ad0a6cf95fc27bcd281b91ef93bc119bf91398df8b78b84d2a"
     },
     {
       "file": "purchase.wav",
@@ -467,5 +467,5 @@
       "sha256": "4e905fb630c9f1f8347b50e05f558db2db0999acc3e9a41cf5f3a7b9bd0668d8"
     }
   ],
-  "total_pcm_file_bytes": 13288548
+  "total_pcm_file_bytes": 13284228
 }

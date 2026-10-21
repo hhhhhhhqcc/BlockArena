@@ -1,4 +1,4 @@
-param([string]$Destination = 'E:\project\BlockArena')
+﻿param([string]$Destination = 'E:\project\BlockArena')
 $ErrorActionPreference = 'Stop'
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $targetRoot = [IO.Path]::GetFullPath($Destination)
@@ -20,7 +20,7 @@ foreach ($entry in $entries) {
 $targetTools = Join-Path $targetRoot 'Tools'
 New-Item -ItemType Directory -Path $targetTools -Force | Out-Null
 Copy-Item -LiteralPath $PSCommandPath -Destination $targetTools -Force
-foreach ($audioTool in @('Generate-ArenaAudio.py','ArenaAudio-Notes.md')) {
+foreach ($audioTool in @('Generate-ArenaAudio.py','ArenaAudio-Notes.md','Verify-CombatVfx.ps1','Verify-Battlefields.ps1','Verify-CommandUpdate.ps1','Generate-BattlefieldAudio.py','Generate-InterfaceAudio.py','Verify-PolishUpdate.ps1','Verify-InterfaceUpdate.ps1','Verify-MenuUpdate.ps1','Verify-SettingsUpdate.ps1','Package-Release.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $audioTool) -Destination $targetTools -Force
 }
 foreach ($suite in @('CoreChecks','NetworkChecks')) {
@@ -30,4 +30,4 @@ foreach ($suite in @('CoreChecks','NetworkChecks')) {
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $targetSuite -Force }
 }
 Write-Output ('EXPORTED_PROJECT ' + $targetRoot)
-Get-Item -LiteralPath (Join-Path $targetRoot 'Builds\Windows-0.8.0\BlockArena.exe') | Select-Object FullName,Length
+Get-Item -LiteralPath (Join-Path $targetRoot 'Builds\Windows-0.9.5\BlockArena.exe') | Select-Object FullName,Length

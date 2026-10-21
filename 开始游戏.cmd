@@ -1,8 +1,8 @@
 @echo off
 chcp 65001 >nul
-if not exist "%~dp0Builds\Windows-0.8.0\BlockArena.exe" (
+if not exist "%~dp0Builds\Windows-0.9.5\BlockArena.exe" (
   echo 请先在Unity菜单中选择 方块斗兽场 / 构建 Windows 试玩版
   pause
   exit /b 1
 )
-start "" "%~dp0Builds\Windows-0.8.0\BlockArena.exe"
+start "" "%~dp0Builds\Windows-0.9.5\BlockArena.exe"

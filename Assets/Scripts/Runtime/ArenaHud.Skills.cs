@@ -18,19 +18,23 @@ namespace BlockArena.Runtime
         public bool HasSkillDetails { get { return !string.IsNullOrEmpty(detailSkillId); } }
         Vector2 HudPointer { get { return app.VerificationInput && app.VerificationPointer.HasValue ? app.VerificationPointer.Value : (Vector2)Input.mousePosition; } }
         bool SkillUiAvailable { get { return app.State != null && app.Me != null && app.State.phase != "lobby" && !ModalOpen; } }
-        Rect OwnedSkillToggleRect { get { return new Rect(18, height - 64, 220, 40); } }
-        Rect OwnedSkillPanelRect { get { return new Rect(18, Mathf.Max(80, height - 422), 344, 344); } }
+        Rect OwnedSkillToggleRect { get { Rect r=CommandDockRect;return new Rect(r.x+270,r.y+22,132,44); } }
+        Rect OwnedSkillPanelRect { get { return new Rect(CommandDockRect.x+257, Mathf.Max(84, CommandDockRect.y-354), 344, 344); } }
         Rect OwnedSkillViewport { get { Rect r = OwnedSkillPanelRect; return new Rect(r.x + 12, r.y + 55, r.width - 24, r.height - 69); } }
         Rect SkillDetailsRect
         {
             get {
-                float w = 388, h = Mathf.Min(560, height - 110);
-                float x = ShowOwnedSkills ? OwnedSkillPanelRect.xMax + 12 : 18, y = height - h - 90;
+                const float top=84;
+                float bottom=Mathf.Max(top+1,CommandDockRect.y-12);
+                float w = Mathf.Min(388,width-24), h = Mathf.Min(560,bottom-top);
+                float x = ShowOwnedSkills ? OwnedSkillPanelRect.xMax + 12 : 18, y = bottom-h;
                 if (app.ShowShop && MarketVisible) {
                     Rect shop = MarketRect; x = shop.x - w - 12; y = shop.y;
                     if (x < 12) x = shop.xMax + 12;
                 }
-                return new Rect(Mathf.Clamp(x, 12, Mathf.Max(12, width - w - 12)), Mathf.Clamp(y, 80, Mathf.Max(80, height - h - 18)), w, h);
+                y=Mathf.Clamp(y,top,bottom-h);
+                if(ShowOwnedSkills&&new Rect(x,y,w,h).Overlaps(OwnedSkillPanelRect))x=OwnedSkillPanelRect.x-w-12;
+                return new Rect(Mathf.Clamp(x, 12, Mathf.Max(12, width - w - 12)), y, w, h);
             }
         }
         Rect MarketSkillCardRect(int index) { Rect r = MarketRect; return new Rect(r.x + 14 + (index % 2) * 229, r.y + 88 + (index / 2) * 147, 215, 137); }
@@ -125,43 +129,44 @@ namespace BlockArena.Runtime
         }
         bool SkillDetailButton(Rect r, TradeDefinition item)
         {
-            bool enabled = GUI.enabled && !AudioBlocksUnderlying && !EconomyBlocksUnderlying && (drawingSkills || !SkillBlocksUnderlying);
+            bool enabled = GUI.enabled && LayerAcceptsPointer();
             bool previous = GUI.enabled; GUI.enabled = enabled; RegisterPointerRect(r);
             bool clicked = GUI.Button(r, GUIContent.none, GUIStyle.none); GUI.enabled = previous;
-            if (clicked) { OpenSkillDetails(item.id); if (SoundCue != null) SoundCue("click"); }
+            if (clicked) { OpenSkillDetails(item.id); ClickFeedback("ui_click"); }
             return clicked;
         }
         void SkillHover(TradeDefinition item)
         {
-            if (HasSkillDetails || !GUI.enabled || AudioBlocksUnderlying) return;
-            SetHover(item.name, item.description + "\n\n适用：" + TargetName(item.target) + " · " + ApplicableSpecies(item).Count + " 种\n当前军团匹配 " + MatchingArmyCount(item) + " 只\n点击技能查看全部适用生物", HudPointer);
+            if (HasSkillDetails || !GUI.enabled || !LayerAcceptsPointer()) return;
+            SetHover(item.name, item.description + "\n\n适用：" + TargetName(item.target) + " · " + ApplicableSpecies(item).Count + " 种\n当前匹配 " + MatchingArmyCount(item) + " 只", HudPointer);
         }
 
         void DrawSkillPanels()
         {
             if (!SkillUiAvailable) return;
             RefreshSkillCounts(); drawingSkills = true;
-            bool previous = GUI.enabled, active = !marketDragging && !AudioBlocksUnderlying;
-            GUI.enabled = active && !(HasSkillDetails && SkillDetailsRect.Contains(Mouse()));
-            if (IconButton(OwnedSkillToggleRect, "book", "已购技能 · " + ownedSkills.Count + (ShowOwnedSkills ? "  −" : "  ＋"), new Color(.13f, .23f, .22f))) ShowOwnedSkills = !ShowOwnedSkills;
+            bool previous = GUI.enabled, active = previous&&!marketDragging;
+            GUI.enabled = active;
+            if (IconButton(OwnedSkillToggleRect, "book", "技能  " + ownedSkills.Count, new Color(.11f, .20f, .22f))) ShowOwnedSkills = !ShowOwnedSkills;
+            if(OwnedSkillToggleRect.Contains(Mouse()))SetHover("已购技能",ownedSkills.Count+" 项永久技能。",HudPointer);
             if (ShowOwnedSkills) DrawOwnedSkills();
             GUI.enabled = active;
-            if (HasSkillDetails) DrawSkillDetails();
+            if (HasSkillDetails) {drawingSkillDetails=true;DrawSkillDetails();drawingSkillDetails=false;}
             GUI.enabled = previous; drawingSkills = false;
         }
         void DrawOwnedSkills()
         {
             Rect r = OwnedSkillPanelRect; Panel(r, new Color(.055f, .095f, .105f, .98f));
-            Text(new Rect(r.x + 17, r.y + 13, 255, 30), "永久技能 · " + ownedSkills.Count, label, gold);
+            PanelHeading(r,"book","永久技能  ·  " + ownedSkills.Count);
             if (IconButton(new Rect(r.xMax - 45, r.y + 10, 32, 30), "close", "", new Color(.13f, .2f, .21f))) ShowOwnedSkills = false;
             Rect viewport = OwnedSkillViewport;
             if (ownedSkills.Count == 0) { Text(new Rect(r.x + 21, r.y + 90, r.width - 42, 75), "尚未购买永久技能\n商店购买后，现有与未来的适用生物都会获得强化。", small, muted); return; }
-            ownedSkillScroll = GUI.BeginScrollView(viewport, ownedSkillScroll, new Rect(0, 0, viewport.width - 20, Mathf.Max(viewport.height, ownedSkills.Count * 88)));
+            ownedSkillScroll = BeginUiScroll(viewport, ownedSkillScroll, new Rect(0, 0, viewport.width - 20, Mathf.Max(viewport.height, ownedSkills.Count * 88)));
             for (int i = 0; i < ownedSkills.Count; i++) {
                 if (i * 88 + 84 < ownedSkillScroll.y || i * 88 > ownedSkillScroll.y + viewport.height) continue;
                 TradeDefinition item = TradeCatalog.Get(ownedSkills[i]); int matches = MatchingArmyCount(item);
                 Rect row = new Rect(0, i * 88, viewport.width - 22, 82);
-                Fill(row, new Color(.09f, .15f, .16f)); Fill(new Rect(row.x, row.y, 3, row.height), matches > 0 ? mint : copper);
+                RoundFill(row, new Color(.09f, .15f, .16f),7); Fill(new Rect(row.x, row.y+8, 2, row.height-16), matches > 0 ? mint : copper);
                 ArenaIcons.Draw(new Rect(9, row.y + 9, 25, 25), ItemIcon(item)); Text(new Rect(42, row.y + 7, 170, 27), item.name, micro, white);
                 Text(new Rect(213, row.y + 7, 80, 27), matches + " 只", micro, matches > 0 ? mint : muted);
                 Text(new Rect(11, row.y + 36, row.width - 22, 40), ArenaDescription.Format(Compact(item.description, 26)), micro, muted);
@@ -175,16 +180,16 @@ namespace BlockArena.Runtime
         {
             TradeDefinition item = TradeCatalog.Get(detailSkillId); List<CreatureDefinition> species = ApplicableSpecies(item); int matches = MatchingArmyCount(item);
             Rect r = SkillDetailsRect; Panel(r, new Color(.055f, .095f, .11f, .99f));
-            Text(new Rect(r.x + 17, r.y + 13, r.width - 72, 31), item.name, label, gold);
+            PanelHeading(r,ItemIcon(item),item.name);
             if (IconButton(new Rect(r.xMax - 46, r.y + 10, 32, 30), "close", "", new Color(.13f, .2f, .22f))) { CloseSkillDetails(); return; }
             bool owned = app.Me.upgrades != null && app.Me.upgrades.Contains(item.id);
-            Text(new Rect(r.x + 17, r.y + 48, r.width - 34, 28), (owned ? "已掌握 · " : "永久技能 · ") + (matches > 0 ? "当前 " + matches + " 只可获益" : "当前无匹配，可为后续招募购买"), micro, matches > 0 ? mint : muted);
+            Text(new Rect(r.x + 17, r.y + 61, r.width - 34, 28), (owned ? "已掌握 · " : "永久技能 · ") + (matches > 0 ? matches + " 只受益" : "暂无匹配"), micro, matches > 0 ? mint : muted);
             if (matches > 0) Fill(new Rect(r.x + 17, r.y + 80, r.width - 34, 2), mint);
             Rect viewport = new Rect(r.x + 17, r.y + 94, r.width - 34, r.height - 111);
             string description = ArenaDescription.Format(item.description);
             float textWidth = viewport.width - 22, descriptionHeight = small.CalcHeight(new GUIContent(description), textWidth);
             float listY = descriptionHeight + 81, contentHeight = listY + species.Count * 33;
-            skillDetailScroll = GUI.BeginScrollView(viewport, skillDetailScroll, new Rect(0, 0, textWidth, Mathf.Max(viewport.height, contentHeight)));
+            skillDetailScroll = BeginUiScroll(viewport, skillDetailScroll, new Rect(0, 0, textWidth, Mathf.Max(viewport.height, contentHeight)));
             Text(new Rect(0, 0, textWidth, descriptionHeight + 3), description, small, white);
             Text(new Rect(0, descriptionHeight + 17, textWidth, 26), "全部适用生物 · " + species.Count + " 种", label, gold);
             Text(new Rect(0, descriptionHeight + 48, textWidth, 26), "当前拥有的种类以青色标出", micro, muted);

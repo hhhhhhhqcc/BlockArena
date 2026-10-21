@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using BlockArena.Core;
 using UnityEngine;
@@ -30,18 +31,73 @@ namespace BlockArena.Runtime
             app.VerificationInput = true;
             yield return new WaitForSecondsRealtime(1.5f);
             sound = app.Sound;
-            if (sound == null || sound.ClipsLoaded != 27 || sound.MusicTrackCount != 3 || !sound.MusicIsPlaying)
+            if (sound == null || sound.ClipsLoaded != 40 || sound.MusicTrackCount != 3 || !sound.MusicIsPlaying)
             { Fail("music and effect resources failed to load"); yield break; }
+            if (!VerifyRevealExit(app)) { Fail("leaving a roulette retained its audio schedule"); yield break; }
             originalMusic = sound.MusicVolume; originalEffects = sound.SfxVolume; originalMute = sound.Muted;
             restoreVolumes = true;
             sound.SetVolumes(.35f, .6f);
             sound.SetPhase("prep");
             yield return new WaitForSecondsRealtime(.6f);
             string preparationTrack = sound.CurrentMusic;
+            if (!VerifyInterfaceConfirmations())
+            { Fail("accepted purchase, refresh, rejection, skill selection or snapshot confirmation baseline failed"); yield break; }
+            // Every input path uses the same short activation sound. Legacy aliases and
+            // their old per-caller intensities must not change its tone or loudness.
+            string[] clickAliases = { "click", "ui_click", "ui_toggle", "ready", "ui_open", "ui_close", "open", "close", "skip" };
+            float[] legacyClickLevels = { .28f, .8f, 1f };
+            yield return new WaitForSecondsRealtime(.12f);
+            int clickBaseline = sound.UiClickCount, activationBaseline = sound.SoundCount;
+            sound.PlayUiClick();
+            sound.Play("click", Vector3.zero, .28f);
+            sound.Play("ui_toggle", Vector3.zero, .8f);
+            if (sound.UiClickCount != clickBaseline + 1 || sound.SoundCount != activationBaseline + 1 ||
+                sound.LastPlayedClip != "click" || Mathf.Abs(sound.LastUiClickLevel - .48f) > .0001f)
+            { Fail("a single UI activation did not play exactly one normalized click"); yield break; }
+            foreach (string alias in clickAliases)
+            {
+                foreach (float legacyLevel in legacyClickLevels)
+                {
+                    yield return new WaitForSecondsRealtime(.12f); // Shared alias cooldown is .035 seconds.
+                    clickBaseline = sound.UiClickCount; activationBaseline = sound.SoundCount;
+                    sound.Play(alias, Vector3.zero, legacyLevel);
+                    if (sound.UiClickCount != clickBaseline + 1 || sound.SoundCount != activationBaseline + 1 ||
+                        sound.LastPlayedClip != "click" || Mathf.Abs(sound.LastUiClickLevel - .48f) > .0001f ||
+                        !ClickVoicesNormalized(sound, .48f * sound.SfxVolume))
+                    { Fail("UI alias changed activation clip, level or pitch: " + alias + " / " + legacyLevel); yield break; }
+                }
+            }
+            yield return new WaitForSecondsRealtime(.12f);
+            activationBaseline = sound.SoundCount; clickBaseline = sound.UiClickCount;
+            sound.Play("ui_click", Vector3.zero, 0);
+            if (sound.SoundCount != activationBaseline || sound.UiClickCount != clickBaseline)
+            { Fail("zero-intensity UI activation was audible"); yield break; }
+            sound.SetVolumes(.35f, .3f);
+            sound.PlayUiClick();
+            if (sound.UiClickCount != clickBaseline + 1 || Mathf.Abs(sound.LastUiClickLevel - .48f) > .0001f ||
+                !ClickVoicesNormalized(sound, .48f * .3f))
+            { Fail("effects volume did not scale the unified UI click bus"); yield break; }
+            sound.SetVolumes(.35f, .6f, true);
+            yield return new WaitForSecondsRealtime(.12f);
+            activationBaseline = sound.SoundCount;
+            sound.PlayUiClick();
+            if (sound.SoundCount != activationBaseline)
+            { Fail("muted UI activation reached an audio voice"); yield break; }
+            sound.SetVolumes(.35f, .6f);
+            if (sound.ClipsLoaded != 40)
+            { Fail("unified UI activation changed the audio resource count"); yield break; }
             int soundsBefore = sound.SoundCount;
             sound.Play("purchase", Vector3.zero, .6f);
             if (sound.SoundCount <= soundsBefore) { Fail("purchase cue did not reach an audio voice"); yield break; }
             if (!VerifyCountdown()) { Fail("countdown snapshot deduplication, eligibility or reconnect baseline failed"); yield break; }
+            if (!VerifyRevealAudio()) { Fail("roulette audio stage ordering, deduplication or reconnect baseline failed"); yield break; }
+            foreach (string cue in new[] { "map_draw", "weather_draw", "draw_tick", "ui_hover", "ui_toggle", "route_node", "skill_select", "tactics_start" })
+            {
+                int baseline = sound.SoundCount;
+                sound.Play(cue, Vector3.zero, .65f);
+                if (sound.SoundCount != baseline + 1) { Fail("new interface cue did not reach an audio voice: " + cue); yield break; }
+                yield return new WaitForSecondsRealtime(.13f);
+            }
             soundsBefore = sound.SoundCount;
             sound.Play("countdown", Vector3.zero, .8f);
             sound.Play("countdown_urgent", Vector3.zero, .8f);
@@ -286,6 +342,11 @@ namespace BlockArena.Runtime
             world.Clear();
             if (world.RitualActive || world.ExecutionActive || HasExecutionStage(world) || world.ExecutionFocusSlot != -1)
             { Fail("clearing a sealed execution left active geometry or cinematic focus"); yield break; }
+            if (!world.FrontendVisible || world.FrontendMode != "main" || world.ViewCamera.orthographic)
+            { Fail("leaving an execution did not enter the dedicated main-menu scene"); yield break; }
+            // Leaving now renders the frontend perspective camera. Re-enter the arena
+            // before comparing the saved gameplay zoom and pan with its original view.
+            world.SetFrontend(null);
             yield return new WaitForSecondsRealtime(1.2f);
             if (!CameraRestored(world, executionViewSize, executionViewPosition, executionViewZoom))
             { Fail("interrupting an execution did not restore the player's previous camera"); yield break; }
@@ -303,7 +364,7 @@ namespace BlockArena.Runtime
             if (world.SkillHighlightCount != 1) { Fail("flying skill did not highlight the actual summoned species"); yield break; }
             world.SetSkillHighlight(null, owner.id);
             if (world.SkillHighlightCount != 0) { Fail("summon skill highlight did not clear"); yield break; }
-            Debug.Log("ARENA_PRESENTATION_OK original music / 27 clips / protected countdown cues / countdown deduplication and reconnect baseline / mute and restore / phase theme change / rising obsidian and crystal / sequential launch and hit / damage-scaled shake " +
+            Debug.Log("ARENA_PRESENTATION_OK original music / 40 clips / unified UI activation aliases, fixed pitch and normalized level / same-frame UI click deduplication / accepted purchase and skill confirmations only / refresh, rejection, duplicate snapshot and cross-round confirmation baselines / protected countdown cues / countdown deduplication and reconnect baseline / mute and restore / phase theme change / rising obsidian and crystal / sequential launch and hit / damage-scaled shake " +
                 string.Join(",", shakePeaks) + " / four serial beam-seal-explosion-shatter-soul executions / target-by-target cinematic focus / full arena between every execution / actual camera closeups and player view restoration / interrupted execution cleanup / execution duplicate suppression and reconnect baseline / late frame execution deadlines and skipped overdue audio / summon species skill highlight / shake settles / authoritative health unchanged");
             Application.Quit(0);
         }
@@ -314,6 +375,62 @@ namespace BlockArena.Runtime
             restoreVolumes = false;
         }
         void OnDestroy() { RestoreAudio(); }
+        static bool ClickVoicesNormalized(ArenaAudio audio, float expectedVolume)
+        {
+            bool playing = false;
+            foreach (AudioSource source in audio.GetComponentsInChildren<AudioSource>())
+            {
+                if (!source.isPlaying || source.clip == null || source.clip.name != "click") continue;
+                playing = true;
+                if (Mathf.Abs(source.pitch - 1) > .0001f || Mathf.Abs(source.volume - expectedVolume) > .0001f) return false;
+            }
+            return playing;
+        }
+        static PlayerState ConfirmationPlayer()
+        {
+            var player = new PlayerState { id = "confirmation", gold = 20, commanderSkill = "drums" };
+            player.units.Add(new UnitState { id = "owned", kind = "zombie" });
+            player.upgrades.Add("existing-skill");
+            player.market.Add(new ShopOffer { id = "offer", kind = "skill", itemId = "new-skill", price = 6 });
+            return player;
+        }
+        static bool VerifyInterfaceConfirmations()
+        {
+            var prior = ConfirmationPlayer();
+            var accepted = ConfirmationPlayer(); accepted.gold = 11;
+            accepted.units.Add(new UnitState { id = "bought", kind = "skeleton", paidPrice = 9 });
+            if (ArenaApp.InterfaceConfirmation(prior, accepted, true) != "purchase") return false;
+            if (ArenaApp.InterfaceConfirmation(accepted, accepted, true) != null) return false;
+            var repeated = ConfirmationPlayer(); repeated.gold = accepted.gold;
+            repeated.units.Add(new UnitState { id = "bought", kind = "skeleton", paidPrice = 9 });
+            if (ArenaApp.InterfaceConfirmation(accepted, repeated, true) != null) return false;
+            var rejected = ConfirmationPlayer();
+            if (ArenaApp.InterfaceConfirmation(prior, rejected, true) != null) return false;
+            var refreshed = ConfirmationPlayer(); refreshed.gold -= 2;
+            refreshed.market[0].id = "refreshed-offer"; refreshed.market[0].itemId = "different-skill";
+            if (ArenaApp.InterfaceConfirmation(prior, refreshed, true) != null) return false;
+            var skillBought = ConfirmationPlayer(); skillBought.gold -= 6;
+            skillBought.upgrades.Add("new-skill"); skillBought.market[0].sold = true;
+            if (ArenaApp.InterfaceConfirmation(prior, skillBought, true) != "purchase" ||
+                ArenaApp.InterfaceConfirmation(skillBought, skillBought, true) != null) return false;
+            var switched = ConfirmationPlayer(); switched.commanderSkill = "ward";
+            if (ArenaApp.InterfaceConfirmation(prior, switched, true) != "skill_select" ||
+                ArenaApp.InterfaceConfirmation(switched, switched, true) != null) return false;
+            var dismissed = ConfirmationPlayer(); dismissed.units.Clear(); dismissed.gold += 4;
+            if (ArenaApp.InterfaceConfirmation(prior, dismissed, true) != null) return false;
+            var granted = ConfirmationPlayer();
+            granted.units.Add(new UnitState { id = "round-allocation", kind = "pig" });
+            if (ArenaApp.InterfaceConfirmation(prior, granted, true) != null) return false;
+            if (ArenaApp.InterfaceConfirmation(prior, accepted, false) != null ||
+                ArenaApp.InterfaceConfirmation(prior, skillBought, false) != null ||
+                ArenaApp.InterfaceConfirmation(prior, switched, false) != null) return false;
+            if (ArenaApp.InterfaceConfirmation(null, accepted, true) != null ||
+                ArenaApp.InterfaceConfirmation(null, skillBought, false) != null ||
+                ArenaApp.InterfaceConfirmation(null, switched, true) != null ||
+                ArenaApp.InterfaceConfirmation(prior, null, true) != null) return false;
+            // Confirmations stay distinct from activation sounds and remain valid audio cues.
+            return ArenaApp.InterfaceConfirmation(prior, prior, true) == null;
+        }
         static bool ExecutionStageVisible(BlockArena.Presentation.ArenaWorld world, int slot, int stage)
         {
             switch (stage)
@@ -395,6 +512,8 @@ namespace BlockArena.Runtime
             state.timeLeft = 1.5f;
             if (countdown.Observe(state, "timer") != 2) return false;
             player.recruitPending = false; state.timeLeft = .5f;
+            if (countdown.Observe(state, "timer") != 1) return false;
+            state.phase = "prep"; state.timeLeft = .4f;
             if (countdown.Observe(state, "timer") != 0) return false;
             state.phase = "prep"; state.timeLeft = 8;
             if (countdown.Observe(state, "timer") != 0) return false;
@@ -404,6 +523,63 @@ namespace BlockArena.Runtime
             if (countdown.Observe(state, "timer") != 0) return false;
             state.phase = "results"; player.eliminated = false; state.timeLeft = 2;
             return countdown.Observe(state, "timer") == 0;
+        }
+        static bool VerifyRevealExit(ArenaApp app)
+        {
+            foreach (string stage in new[] { "map", "weather" })
+            {
+                var emitted = new List<string>();
+                Action<string> play = cue => emitted.Add(cue);
+                float now = Time.unscaledTime;
+                var state = new GameState { phase = "prep", round = 3 };
+                app.RevealAudio.Observe(state, now, play);
+                state.phase = "reveal"; state.revealStage = "arena";
+                app.RevealAudio.Observe(state, now, play);
+                state.revealStage = stage;
+                app.RevealAudio.Observe(state, now, play);
+                if (app.RevealAudio.DrawStartCount != 1) return false;
+                int baseline = emitted.Count;
+                app.Leave();
+                app.RevealAudio.Tick(now + .2f, play);
+                if (emitted.Count != baseline || app.RevealAudio.DrawStartCount != 0 || app.RevealAudio.DrawTickCount != 0)
+                    return false;
+            }
+            return true;
+        }
+        static bool VerifyRevealAudio()
+        {
+            var audio = new ArenaRevealAudio();
+            var emitted = new List<string>();
+            Action<string> play = cue => emitted.Add(cue);
+            var state = new GameState { phase = "prep", round = 2 };
+            audio.Observe(state, 0, play);
+            state.phase = "reveal"; state.revealStage = "arena";
+            audio.Observe(state, .1f, play);
+            state.revealStage = "map"; audio.Observe(state, .2f, play);
+            if (emitted.Count != 1 || emitted[0] != "map_draw") return false;
+            audio.Tick(.35f, play); int count = emitted.Count;
+            if (count != 2 || emitted[1] != "draw_tick") return false;
+            audio.Tick(.35f, play); audio.Tick(5, play);
+            if (emitted.Count != count) return false;
+            state.revealStageAge = 1.2f; audio.Observe(state, 5, play); audio.Tick(5, play);
+            if (emitted.Count != count + 1) return false;
+            audio.Observe(state, 5, play); audio.Tick(5, play);
+            if (emitted.Count != count + 1) return false;
+            state.revealStageAge = .1f; audio.Observe(state, 6, play); audio.Tick(6, play);
+            if (emitted.Count != count + 1) return false;
+            state.revealStage = "terrain"; state.revealStageAge = 0; audio.Observe(state, 7, play);
+            state.revealStage = "weather"; audio.Observe(state, 8, play);
+            if (emitted[emitted.Count - 1] != "weather_draw") return false;
+            audio.Tick(8.2f, play);
+            if (audio.DrawStartCount != 2 || audio.DrawTickCount != 3) return false;
+            var reconnected = new ArenaRevealAudio(); int baseline = emitted.Count;
+            reconnected.Observe(state, 9, play); reconnected.Tick(9.2f, play);
+            state.revealStageAge = .3f; reconnected.Observe(state, 9.3f, play); reconnected.Tick(9.4f, play);
+            if (emitted.Count != baseline) return false;
+            for (int i = 0; i < 30; i++)
+                if (ArenaRevealAudio.DrawIndex("weather", i * .1f, 3) < 0 || ArenaRevealAudio.DrawIndex("weather", i * .1f, 3) >= 3) return false;
+            audio.Reset();
+            return audio.DrawStartCount == 0 && audio.DrawTickCount == 0;
         }
         void Fail(string message) { RestoreAudio(); Debug.LogError("ARENA_PRESENTATION_FAILED " + message); Application.Quit(2); }
     }

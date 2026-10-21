@@ -54,11 +54,28 @@ namespace BlockArena.Runtime
                 c.Line(22,24,29,24,new Color(.24f,.26f,.27f),1);c.Line(22,24,19,21,new Color(.1f,.13f,.14f),1);
             });}
         }
+        static Texture2D disc;
+        public static Texture2D Disc
+        {
+            get {
+                if(disc!=null)return disc;
+                disc=new Texture2D(32,32,TextureFormat.RGBA32,false){name="Arena soft corner",filterMode=FilterMode.Bilinear,wrapMode=TextureWrapMode.Clamp,hideFlags=HideFlags.DontSave};
+                var pixels=new Color[32*32];
+                for(int y=0;y<32;y++)for(int x=0;x<32;x++){float distance=Mathf.Sqrt((x-15.5f)*(x-15.5f)+(y-15.5f)*(y-15.5f));pixels[y*32+x]=new Color(1,1,1,Mathf.Clamp01(16-distance));}
+                disc.SetPixels(pixels);disc.Apply(false,true);return disc;
+            }
+        }
         static void PaintItem(Canvas c,string icon)
         {
             Color soul=new Color(.3f,.91f,.87f),steel=new Color(.69f,.79f,.82f),wood=new Color(.46f,.27f,.14f);
             switch(icon)
             {
+                case "settings":
+                    c.Box(12,2,8,28,steel);c.Box(2,12,28,8,steel);c.Box(6,6,20,20,steel);c.Box(10,8,12,16,soul);c.Box(8,10,16,12,soul);c.Box(12,12,8,8,ink);c.Box(14,14,4,4,light);break;
+                case "music":
+                    c.Box(13,4,3,20,steel);c.Box(13,4,13,4,steel);c.Box(23,4,3,16,steel);c.Box(6,21,10,7,soul);c.Box(17,17,9,7,gold);break;
+                case "sound":
+                    c.Box(4,12,6,10,steel);c.Box(10,8,5,18,steel);c.Box(14,5,4,24,light);c.Line(21,10,24,13,soul,2);c.Line(24,13,24,20,soul,2);c.Line(24,20,21,23,soul,2);c.Line(25,5,29,10,gold,2);c.Line(29,10,29,24,gold,2);break;
                 case "coin":
                     c.Box(9,3,14,3,ink);c.Box(5,6,22,20,ink);c.Box(9,26,14,3,ink);c.Box(9,5,14,22,gold);c.Box(7,8,18,15,gold);c.Box(10,8,12,3,new Color(1,.89f,.46f));c.Box(11,12,3,9,new Color(.65f,.37f,.1f));c.Box(17,10,3,11,new Color(1,.86f,.35f));break;
                 case "heart":

@@ -34,7 +34,10 @@ namespace BlockArena.Runtime
                 new Term("攻击速度", Speed), new Term("移动速度", Speed), new Term("攻速", Speed),
                 new Term("移速", Speed), new Term("射程", Speed), new Term("冷却", Speed),
                 new Term("死亡分裂", Control), new Term("分裂", Control), new Term("召唤", Control),
-                new Term("瞬移", Control), new Term("自爆", Damage), new Term("反射", Damage)
+                new Term("瞬移", Control), new Term("自爆", Damage), new Term("反射", Damage),
+                new Term("定身", Control), new Term("抗性", Defense), new Term("隐蔽", Control),
+                new Term("净化", Defense), new Term("易伤", Damage), new Term("冻结", Control),
+                new Term("嘲讽", Control), new Term("传送", Control), new Term("范围", Speed)
             };
             Array.Sort(result, (a, b) => b.text.Length.CompareTo(a.text.Length));
             return result;

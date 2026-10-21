@@ -37,7 +37,7 @@ namespace BlockArena.Editor
         {
             PlayerSettings.companyName = "BlockArena";
             PlayerSettings.productName = "方块斗兽场";
-            PlayerSettings.bundleVersion = "0.8.0";
+            PlayerSettings.bundleVersion = "0.9.5";
             PlayerSettings.SetScriptingBackend(BuildTargetGroup.Standalone, ScriptingImplementation.Mono2x);
             PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.Standalone, ApiCompatibilityLevel.NET_Standard_2_0);
             PlayerSettings.defaultScreenWidth = 1440; PlayerSettings.defaultScreenHeight = 900;

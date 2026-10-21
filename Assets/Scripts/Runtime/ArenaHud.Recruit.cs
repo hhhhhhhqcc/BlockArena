@@ -15,6 +15,16 @@ namespace BlockArena.Runtime
             internal float height;
         }
         readonly Dictionary<string,List<RecruitEffect>> recruitEffects = new Dictionary<string,List<RecruitEffect>>();
+        bool recruitHidden;
+        int recruitVisibilityRound=-1;
+        public bool RecruitVisible { get { SyncRecruitVisibility();return RecruitPending&&!recruitHidden; } }
+        public bool RecruitOverlayVisible { get { return RecruitVisible; } }
+        bool RecruitPending { get { return app.State!=null&&app.State.phase=="recruit"&&app.Me!=null&&app.Me.recruitPending&&!app.Me.eliminated; } }
+        Rect RecruitRestoreRect { get { return ReadyRect; } }
+        void SyncRecruitVisibility(){if(app.State==null){recruitVisibilityRound=-1;recruitHidden=false;return;}if(recruitVisibilityRound!=app.State.round){recruitVisibilityRound=app.State.round;recruitHidden=false;}if(!RecruitPending)recruitHidden=false;}
+        public void SetRecruitVisible(bool visible){SyncRecruitVisibility();if(RecruitPending)recruitHidden=!visible;ClearHover();}
+        public void ToggleRecruit(){SetRecruitVisible(!RecruitVisible);}
+        void DrawRecruitRestore(){if(RecruitPending&&!RecruitVisible&&IconButton(RecruitRestoreRect,"bag","招募援军",new Color(.2f,.35f,.30f)))SetRecruitVisible(true);}
         string refreshPendingOffer;
         float refreshPendingUntil;
 
@@ -97,11 +107,11 @@ namespace BlockArena.Runtime
             string[] choices = app.Me.shop; if (choices == null) return;
             float cardHeight = RecruitCardHeight, total = RecruitCardWidth * 3 + RecruitCardGap * 2;
             float x = (width-total)/2, y = (height-cardHeight-RecruitSheetPadding)/2;
-            Text(new Rect(x,y,total,26),"灵魂契约  /  第 "+app.State.round.ToString("00")+" 轮",small,gold);
-            Text(new Rect(x,y+32,total-250,54),app.State.round==1?"你的军团，由此启程。":"为下一场战斗，招募援军。",title,white);
+            Text(new Rect(x,y,total,26),"第 "+app.State.round.ToString("00")+" 轮  /  招募",small,gold);
+            Text(new Rect(x,y+32,total-250,54),app.State.round==1?"第一份契约":"招募援军",title,white);
             ArenaIcons.Draw(new Rect(x+total-205,y+39,36,36),"coin");
             Text(new Rect(x+total-160,y+37,160,40),app.Me.gold+" 金币",heading,gold);
-            Text(new Rect(x,y+94,total,29),"选择一只加入军团 · 技能效果可直接比较",label,muted);
+            if(IconButton(new Rect(x+total-44,y-6,44,35),"close","",new Color(.14f,.23f,.23f)))SetRecruitVisible(false);
             bool pending = (pendingRound==app.State.round && Time.unscaledTime<pendingUntil) ||
                 (refreshPendingOffer==app.Me.recruitOfferId&&Time.unscaledTime<refreshPendingUntil);
             for (int i=0;i<Mathf.Min(3,choices.Length);i++) {
@@ -127,7 +137,7 @@ namespace BlockArena.Runtime
                     effectY += 25+effect.height+12;
                 }
                 bool affordable = app.Me.gold>=item.price; GUI.enabled = !pending&&affordable&&app.Connected;
-                if (IconButton(new Rect(card.x+18,card.yMax-66,RecruitBodyWidth,49),"coin",pending?"契约确认中…":affordable?"招募 · "+item.price+" 金币":"金币不足 · 需要 "+item.price,new Color(.18f,.61f,.55f),"purchase")) {
+                if (IconButton(new Rect(card.x+18,card.yMax-66,RecruitBodyWidth,49),"coin",pending?"确认中…":affordable?"招募  ·  "+item.price:"需要  "+item.price,new Color(.18f,.61f,.55f),"purchase")) {
                     pendingRound=app.State.round; pendingUntil=Time.unscaledTime+3; app.Send(new GameCommand{type="choose",index=i,offerId=app.Me.recruitOfferId});
                 }
                 GUI.enabled = true;
@@ -139,9 +149,9 @@ namespace BlockArena.Runtime
                 app.Send(new GameCommand{type="recruit_refresh",offerId=app.Me.recruitOfferId});
             }
             GUI.enabled=app.Connected;
-            if(IconButton(new Rect(x+240,footerY,210,45),"bag","军团 · "+app.Me.units.Count,new Color(.15f,.23f,.23f)))ToggleArmy();
+            if(IconButton(new Rect(x+240,footerY,210,45),"close","回到场地",new Color(.15f,.23f,.23f)))SetRecruitVisible(false);
             GUI.enabled = !pending&&app.Connected;
-            if (IconButton(new Rect(x+total-268,footerY,268,45),"skip","保留金币 · 跳过招募",new Color(.28f,.24f,.17f))) app.Send(new GameCommand{type="skip"});
+            if (IconButton(new Rect(x+total-268,footerY,268,45),"skip","跳过招募",new Color(.28f,.24f,.17f))) app.Send(new GameCommand{type="skip"});
             GUI.enabled = true;
             Text(new Rect(x+469,footerY+10,200,31),"剩余 "+Mathf.CeilToInt(app.State.timeLeft)+" 秒",small,muted);
         }

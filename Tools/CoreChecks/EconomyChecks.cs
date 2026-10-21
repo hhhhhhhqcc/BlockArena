@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -46,7 +46,7 @@ internal static partial class Program
             var g=Two(false);var p=g.State.players[0];p.gold=0;string before=Json(g.State);
             Reject(()=>g.Apply(p.id,new GameCommand{type="choose",index=0}));Equal(before,Json(g.State));
             g.Apply(p.id,new GameCommand{type="skip"});Equal(0,p.gold);Equal(2,p.units.Count);Assert(!p.recruitPending&&p.recruitChoice==null);
-            g.State.players[1].gold=0;Advance(g,25.2f);Equal("prep",g.State.phase);Equal(2,g.State.players[1].units.Count);
+            g.State.players[1].gold=0;Advance(g,ArenaGame.PrepSeconds+.05f);Equal("reveal",g.State.phase);Equal(2,g.State.players[1].units.Count);
         });
         Check("skill-only purchases need no creature selection and reject invalid offers without charging", () =>
         {
@@ -123,8 +123,8 @@ internal static partial class Program
             string offers=JsonSerializer.Serialize(p.market,JsonOptions);int gold=p.gold;
             Advance(g,24);Equal("recruit",g.State.phase);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));
             g.Apply("b",new GameCommand{type="choose",index=0});Equal("prep",g.State.phase);
-            Advance(g,ArenaGame.PrepSeconds-.2f);Equal("prep",g.State.phase);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));
-            Advance(g,.4f);Equal("battle",g.State.phase);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));Equal(gold,p.gold);Near(0,p.shopRefreshLeft);
+            Advance(g,g.State.timeLeft-.2f);Equal("prep",g.State.phase);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));
+            Advance(g,.4f);Equal("reveal",g.State.phase);FinishDeployment(g);Equal(offers,JsonSerializer.Serialize(p.market,JsonOptions));Equal(gold,p.gold);Near(0,p.shopRefreshLeft);
         });
         Check("each new round replaces offers without charging a refresh fee", () =>
         {

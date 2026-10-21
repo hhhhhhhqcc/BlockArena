@@ -34,7 +34,7 @@ namespace BlockArena.Presentation
             string eventId = roundEvent == null ? null : roundEvent.id;
             bool active = roundEvent != null && roundEvent.active && next.phase == "battle" &&
                 (roundEvent.kind == "boss" || roundEvent.kind == "gold");
-            if (roundEvent != null) eventLocation = Position(roundEvent.x, roundEvent.y);
+            if (roundEvent != null) eventLocation = WorldSurfacePoint(roundEvent.x, roundEvent.y);
             if (active && (!eventWasActive || eventId != eventObservedId)) {
                 eventBornAt = baseline ? Time.unscaledTime - 2 : Time.unscaledTime;
                 if (!baseline) StartArenaEventArrival(eventLocation);

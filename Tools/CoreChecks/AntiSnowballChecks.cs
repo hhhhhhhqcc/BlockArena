@@ -1,22 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using BlockArena.Core;
 
 internal static partial class Program
 {
-    static ArenaGame EventBattle(string kind)
-    {
-        ArenaGame game = Two();
-        game.State.players[0].units = new List<UnitState> { new UnitState { id = "event-a", kind = "skeleton", x = -200 } };
-        game.State.players[1].units = new List<UnitState> { new UnitState { id = "event-b", kind = "cow", x = 200 } };
-        game.State.roundEvent = new ArenaEventState { id = "forced-event", kind = kind, round = game.State.round,
-            reward = kind == "boss" ? 4 : 3 };
-        Battle(game, true);
-        FreezeCombat(game);
-        return game;
-    }
-
     static void FreezeCombat(ArenaGame game)
     {
         foreach (FighterState fighter in game.State.fighters)
@@ -170,94 +158,22 @@ internal static partial class Program
                 Equal(gold[i] + 6 + expected[i], game.State.players[i].gold);
             }
         });
-        Check("round events are announced once during recruitment and explicit seeds reproduce their shared selection", () =>
+        Check("central guardian events never generate while fixed map objectives remain", () =>
         {
-            var kinds = new HashSet<string>();
-            for (int seed = 0; seed < 60; seed++)
+            for (int seed=0;seed<30;seed++)
             {
-                ArenaGame first = new ArenaGame("a", "甲", seed); ArenaGame second = new ArenaGame("a", "甲", seed);
-                first.Apply("a", new GameCommand { type = "start" }); second.Apply("a", new GameCommand { type = "start" });
-                Equal(Json(first.State), Json(second.State));
-                ArenaEventState announced = first.State.roundEvent;
-                kinds.Add(announced.kind); Equal(first.State.round, announced.round); Assert(!announced.active);
-                Equal(announced.id, first.SnapshotFor("a").roundEvent.id);
-                Equal(announced.id, first.SnapshotFor("bot-1").roundEvent.id);
+                var game=new ArenaGame("a","甲",seed);game.AddPlayer("b","乙");
+                game.Apply("a",new GameCommand{type="start",bots=false});
+                Assert(game.State.roundEvent==null);ChooseAll(game);
+                // Retired client/save data must not reactivate the removed central encounter.
+                game.State.roundEvent=new ArenaEventState{id="legacy",kind="boss",reward=4};
+                foreach(var player in game.State.players)player.ready=true;
+                while(game.State.phase=="prep")game.Tick(.05f);
+                FinishDeployment(game);
+                Assert(game.State.roundEvent==null);Assert(!game.State.fighters.Any(f=>f.neutral));
+                Assert(game.State.battlefield.objectives.Count>0);
+                Assert(game.SnapshotFor("a").roundEvent==null);
             }
-            Assert(kinds.SetEquals(new[] { "none", "boss", "gold" }));
-        });
-        Check("boss and gold last hits award only their event reward once including a summoned attacker's owner", () =>
-        {
-            foreach (string kind in new[] { "boss", "gold" })
-            {
-                ArenaGame game = EventBattle(kind); PlayerState owner = game.State.players[0];
-                FighterState actor = game.State.fighters.First(f => f.neutral);
-                FighterState attacker = game.State.fighters.First(f => f.ownerId == owner.id);
-                Assert(actor.slot == -1 && actor.ownerId == "neutral" && !actor.summoned);
-                int unitCount = owner.units.Count, gold = owner.gold;
-                if (kind == "gold") attacker.summoned = true;
-                Strike(game, attacker, actor);
-                Equal(kind == "boss" ? 4 : 3, owner.eventIncome);
-                Equal(gold + owner.eventIncome, owner.gold); Equal(0, owner.roundKills); Equal(0, owner.killIncome); Equal(0, owner.bountyKills);
-                Assert(!game.State.roundEvent.active); Equal(owner.id, game.State.roundEvent.claimedBy);
-                Equal(unitCount, owner.units.Count); Equal("battle", game.State.phase);
-                FreezeCombat(game); Advance(game, .5f); Equal(gold + owner.eventIncome, owner.gold);
-                game.State.timeLeft = .001f; game.Tick(.05f);
-                Equal(6 + owner.rankIncome + owner.eventIncome, owner.lastIncome);
-                Equal(gold + owner.lastIncome, owner.gold);
-                Equal(owner.eventIncome, game.State.placements.First(p => p.playerId == owner.id).eventIncome);
-            }
-        });
-        Check("neutral gold is stationary and cannot attack or acquire golem spawn armor", () =>
-        {
-            ArenaGame game = EventBattle("gold"); FighterState gold = game.State.fighters.First(f => f.neutral);
-            Near(0, gold.attack); Near(0, gold.speed); Near(0, gold.armor); Near(0, gold.shield);
-            gold.attackCooldown = 0;
-            foreach (FighterState fighter in game.State.fighters.Where(f => !f.neutral)) { fighter.x = 1; fighter.y = 1; }
-            float[] health = game.State.fighters.Where(f => !f.neutral).Select(f => f.hp).ToArray();
-            Advance(game, .5f); Near(0, gold.x); Near(0, gold.y); Equal(0, gold.attacks);
-            int index = 0; foreach (FighterState fighter in game.State.fighters.Where(f => !f.neutral)) Near(health[index++], fighter.hp);
-        });
-        Check("gold resource can be finished by poison and credits the original caster once", () =>
-        {
-            ArenaGame game = EventBattle("gold"); FighterState resource = game.State.fighters.First(f => f.neutral);
-            FighterState caster = game.State.fighters.First(f => f.ownerId == "a");
-            resource.hp = 1; resource.poisonDps = 10; resource.poisonTime = .5f; resource.poisonSource = caster;
-            int gold = game.State.players[0].gold;
-            Advance(game, .6f); Assert(resource.dead); Equal(3, game.State.players[0].eventIncome);
-            Equal(gold + 3, game.State.players[0].gold); Equal(0, game.State.players[0].roundKills);
-        });
-        Check("boss reevaluates the army with most current living health rather than commander health or fixed max health", () =>
-        {
-            ArenaGame game = EventBattle("boss"); FighterState boss = game.State.fighters.First(f => f.neutral);
-            FighterState a = game.State.fighters.First(f => f.ownerId == "a"), b = game.State.fighters.First(f => f.ownerId == "b");
-            a.hp = 100; b.hp = 80; game.State.players[0].hp = 1; game.Tick(.05f);
-            Equal(a.id, boss.targetId); Equal("a", game.State.roundEvent.targetPlayerId);
-            a.hp = 20; b.hp = 70; game.Tick(.05f); Equal(b.id, boss.targetId);
-            FighterState dead = ArenaGame.PreviewFighter(game.State.players[0], new UnitState { id = "dead-body", kind = "ender_dragon" });
-            dead.hp = 10000; dead.dead = true; game.State.fighters.Add(dead);
-            game.Tick(.05f); Equal(b.id, boss.targetId);
-        });
-        Check("a neutral boss cannot earn kill gold or keep a one-army battle alive or enter settlement ranks", () =>
-        {
-            ArenaGame game = EventBattle("boss"); FighterState boss = game.State.fighters.First(f => f.neutral);
-            FighterState a = game.State.fighters.First(f => f.ownerId == "a"), b = game.State.fighters.First(f => f.ownerId == "b");
-            a.hp = 10; b.hp = 100; b.shield = b.armor = 0;
-            boss.attack = 10000; boss.range = 2000; boss.attackCooldown = 0;
-            game.Tick(.05f); Assert(b.dead); Assert(!boss.dead); Equal("results", game.State.phase);
-            Equal(2, game.State.placements.Count); Assert(game.State.placements.All(p => p.playerId != "neutral"));
-            Assert(game.State.players.All(player => player.roundKills == 0 && player.bountyIncome == 0 && player.eventIncome == 0));
-            Assert(!game.State.roundEvent.active && game.State.roundEvent.claimedBy == null);
-        });
-        Check("event DTO, leader, live incomes and neutral fields are deeply copied in every snapshot", () =>
-        {
-            ArenaGame game = EventBattle("boss"); game.State.leaderId = "b";
-            game.State.players[0].bountyKills = 6; game.State.players[0].bountyIncome = 2; game.State.players[0].eventIncome = 4;
-            GameState copy = game.SnapshotFor("a"); Equal("b", copy.leaderId);
-            Equal(6, copy.players[0].bountyKills); Equal(2, copy.players[0].bountyIncome); Equal(4, copy.players[0].eventIncome);
-            Assert(copy.fighters.Any(f => f.neutral && f.slot == -1));
-            string original = Json(game.State); copy.roundEvent.reward = 99; copy.roundEvent.claimedBy = "fake";
-            copy.players[0].bountyIncome = 100; copy.fighters.First(f => f.neutral).hp = 0;
-            Equal(original, Json(game.State));
         });
     }
 }

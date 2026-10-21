@@ -9,7 +9,7 @@ namespace BlockArena.Core
     /// <summary>Dependency-free authoritative rules, shared by the host and rule checks.</summary>
     public sealed partial class ArenaGame
     {
-        public const float RecruitSeconds = 25f, PrepSeconds = 45f, BattleSeconds = 55f, ResultsSeconds = 6f;
+        public const float PrepSeconds = 45f, RecruitSeconds = PrepSeconds, BattleSeconds = 55f, ResultsSeconds = 6f;
         public GameState State { get; private set; }
         public int Seed { get; private set; }
         private readonly Random random;
@@ -71,6 +71,7 @@ namespace BlockArena.Core
             PlayerState p = Player(playerId);
             if (command == null) Fail("操作无效");
             string type = command.type;
+            if (HandleBattlefieldCommand(p, command)) return;
             if (type == "start")
             {
                 if (playerId != State.hostId) Fail("只有房主可以开始");
@@ -83,17 +84,31 @@ namespace BlockArena.Core
             {
                 if (playerId != State.hostId) Fail("只有房主可以重新开始");
                 if (State.phase != "finished") Fail("对战尚未结束");
-                Start(State.players.Count < 2);
+                ReturnToLobby();
                 return;
             }
             if (p.eliminated) Fail("你已被淘汰，可以继续观战");
+            if (HandleTacticsCommand(p, command)) return;
             if (type == "move")
             {
+                if(State.phase!="prep"&&State.phase!="recruit"&&State.phase!="tactics"&&State.phase!="battle")Fail("当前阶段不能移动");
                 if (!Finite(command.dx) || !Finite(command.dy)) Fail("移动方向无效");
                 double length = Math.Sqrt((double)command.dx * command.dx + (double)command.dy * command.dy);
                 double factor = Math.Max(1d, length);
                 p.moveX = (float)(command.dx / factor); p.moveY = (float)(command.dy / factor); p.moveUntil = clock + .28f;
+                p.steveNavigating=false;
                 return;
+            }
+            if(type=="move_to")
+            {
+                if(State.phase!="prep"&&State.phase!="recruit"&&State.phase!="tactics"&&State.phase!="battle")Fail("当前阶段不能移动");
+                if(!Finite(command.x)||!Finite(command.y)||Math.Abs(command.x)>410||Math.Abs(command.y)>410)Fail("移动目的地无效");
+                Point2 destination=new Point2(command.x,command.y);
+                if(State.phase=="prep"||State.phase=="recruit"){
+                    Point2 moveLocal=WorldToLocal(p.slot,destination.x,destination.y);
+                    moveLocal.x=Clamp(moveLocal.x,-220,220);moveLocal.y=Clamp(moveLocal.y,165,400);destination=LocalToWorld(p.slot,moveLocal.x,moveLocal.y);
+                }else destination=BattlefieldSafePoint(destination,false,false,9);
+                p.steveDestination=destination;p.steveNavigating=true;p.moveUntil=0;return;
             }
             if (type == "choose")
             {
@@ -125,8 +140,8 @@ namespace BlockArena.Core
                 return;
             }
             if (type != "place" && type != "ready") Fail("未知操作");
-            if (State.phase != "recruit" && State.phase != "prep") Fail("请在准备阶段操作");
-            if (p.recruitPending) Fail("请先完成本轮招募");
+            if (State.phase != "recruit" && State.phase != "prep" && State.phase!="tactics") Fail("请在准备阶段操作");
+            if (p.recruitPending&&type=="ready") Fail("请先完成本轮招募");
             if (type == "ready") { p.ready = !p.ready; return; }
             if (command.placementId != null && command.placementId.Length > 64) Fail("布阵请求标识过长");
             UnitState unit = p.units.Find(u => u.id == command.unitId);
@@ -134,6 +149,11 @@ namespace BlockArena.Core
             if (!Finite(command.x) || !Finite(command.y)) Fail("放置坐标无效");
             Point2 local = WorldToLocal(p.slot, command.x, command.y);
             if (local.x < -185.001f || local.x > 185.001f || local.y < 174.999f || local.y > 355.001f) Fail("请将生物放在自己的布阵区域内");
+            if(State.phase=="tactics"){
+                var creature=CreatureCatalog.Get(unit.kind);
+                if(!BattlefieldCatalog.IsPassable(State.battlefield,command.x,command.y,creature.flying,creature.tags.Contains("aquatic"),10))
+                    Fail("该位置无法站立");
+            }
             unit.x = command.x; unit.y = command.y; unit.placementId = command.placementId; p.ready = false;
         }
 
@@ -146,24 +166,43 @@ namespace BlockArena.Core
             State.effects.RemoveAll(e => e.age > (e.type == "explode" ? 1f : .75f));
             foreach (PlayerState p in State.players)
             {
-                if (p.eliminated || p.moveUntil < clock) continue;
-                Point2 local = WorldToLocal(p.slot, p.steve.x + p.moveX * dt * 130f, p.steve.y + p.moveY * dt * 130f);
-                p.steve = LocalToWorld(p.slot, Clamp(local.x, -220, 220), Clamp(local.y, 165, 400));
+                if(p.eliminated)continue;
+                if(p.steveNavigating){TickSteveNavigation(p,dt);continue;}
+                if (p.moveUntil < clock) continue;
+                if(State.phase=="battle"||State.phase=="tactics"){
+                    Point2 at=new Point2(Clamp(p.steve.x+p.moveX*dt*130,-410,410),Clamp(p.steve.y+p.moveY*dt*130,-410,410));
+                    if(BattlefieldCatalog.IsPassable(State.battlefield,at.x,at.y,false,false,9))p.steve=at;
+                    else if(BattlefieldCatalog.IsPassable(State.battlefield,at.x,p.steve.y,false,false,9))p.steve=new Point2(at.x,p.steve.y);
+                    else if(BattlefieldCatalog.IsPassable(State.battlefield,p.steve.x,at.y,false,false,9))p.steve=new Point2(p.steve.x,at.y);
+                }
+                else if(State.phase=="prep"||State.phase=="recruit"){
+                    Point2 local = WorldToLocal(p.slot, p.steve.x + p.moveX * dt * 130f, p.steve.y + p.moveY * dt * 130f);
+                    p.steve = LocalToWorld(p.slot, Clamp(local.x, -220, 220), Clamp(local.y, 165, 400));
+                }
             }
             if (State.phase == "lobby" || State.phase == "finished") return;
             State.timeLeft = Math.Max(0, State.timeLeft - dt);
-            if (State.phase == "recruit")
+            if (State.phase == "recruit" || State.phase == "prep")
             {
                 foreach (PlayerState p in Living())
-                    if (p.recruitPending && Automated(p) && clock >= p.botAt) AutoRecruit(p);
-                if (State.phase == "recruit" && State.timeLeft <= 0)
-                    foreach (PlayerState p in Living()) if (p.recruitPending) AutoRecruit(p);
+                {
+                    if(p.recruitPending&&Automated(p)&&clock>=p.botAt)AutoRecruit(p);
+                    if(!p.recruitPending&&Automated(p))BotPrep(p);
+                }
+                // Reinforcement choice and deployment consume one shared preparation window.
+                // Completing the final choice must never award an additional timer.
+                if(State.timeLeft<=0)
+                    foreach(PlayerState p in Living())if(p.recruitPending)AutoRecruit(p);
+                readyElapsed = Living().All(p => !p.recruitPending&&p.ready) ? readyElapsed + dt : 0;
+                if (State.timeLeft <= 0 || readyElapsed >= 1f) BeginReveal();
             }
-            else if (State.phase == "prep")
-            {
-                foreach (PlayerState p in Living()) if (Automated(p)) BotPrep(p);
-                readyElapsed = Living().All(p => p.ready) ? readyElapsed + dt : 0;
-                if (State.timeLeft <= 0 || readyElapsed >= 1f) BeginBattle();
+            else if(State.phase=="reveal"){
+                TickReveal(dt);
+            }
+            else if(State.phase=="tactics"){
+                foreach(var p in Living())if(Automated(p)&&clock>=p.botAt)p.ready=true;
+                readyElapsed=Living().All(p=>p.ready)?readyElapsed+dt:0;
+                if(State.timeLeft<=0||readyElapsed>=1)BeginBattle();
             }
             else if (State.phase == "battle") CombatTick(dt);
             else if (State.phase == "results" && State.timeLeft <= 0) BeginRecruit(false);
@@ -284,22 +323,40 @@ namespace BlockArena.Core
                 State.players.Add(MakePlayer(id, CreatureCatalog.TeamNames[slot] + "守卫", slot, true));
             }
             State.round = 0; State.winnerId = null;
-            State.leaderId = null; State.roundEvent = null;
+            State.leaderId = null; State.roundEvent = null;State.battlefield=null;battlePlans.Clear();
             foreach (PlayerState p in State.players)
             { p.hp = 20; p.eliminated = false; p.gold = 12; p.roundKills = p.totalKills = p.lastIncome = p.killIncome = p.rankIncome = p.baseIncome = p.lastRank = 0; p.bountyKills = p.bountyIncome = p.eventIncome = 0; p.recruitOfferId = null; p.upgrades.Clear(); }
             BeginRecruit(true);
+        }
+        private void ReturnToLobby()
+        {
+            State.players.RemoveAll(player=>player.bot&&!player.connected);
+            foreach(var player in State.players){
+                player.hp=20;player.eliminated=false;player.ready=false;player.recruitPending=false;
+                player.gold=0;player.roundKills=player.totalKills=player.lastIncome=player.killIncome=player.rankIncome=player.baseIncome=player.lastRank=0;
+                player.bountyKills=player.bountyIncome=player.eventIncome=0;player.shopRefreshLeft=0;
+                player.shop=new string[0];player.recruitChoice=player.recruitOfferId=null;
+                player.units.Clear();player.tactics.Clear();player.market.Clear();player.upgrades.Clear();
+                player.commanderUses=2;player.commanderCooldown=0;player.moveUntil=0;player.steveNavigating=false;
+                player.steve=LocalToWorld(player.slot,0,390);
+            }
+            State.phase="lobby";State.round=0;State.timeLeft=0;State.winnerId=State.leaderId=null;
+            State.roundEvent=null;State.battlefield=null;State.revealStage=null;State.revealStageAge=0;
+            State.fighters.Clear();State.effects.Clear();State.placements.Clear();State.message="";
+            battlePlans.Clear();participants.Clear();defeats.Clear();pendingRifts.Clear();readyElapsed=0;
         }
         private void BeginRecruit(bool first)
         {
             State.round++; State.phase = "recruit"; State.timeLeft = RecruitSeconds;
             State.fighters.Clear(); State.effects.Clear(); State.placements.Clear(); defeats.Clear(); readyElapsed = 0;
-            State.leaderId = null; AnnounceRoundEvent();
+            State.leaderId = null;State.battlefield=null;State.revealStage=null;State.revealStageAge=0;battlePlans.Clear();State.roundEvent=null;
             State.message = "金币招募 · 每轮最多购买一只，也可以保留金币跳过";
             foreach (PlayerState p in State.players)
             {
-                p.ready = false; p.moveUntil = 0; p.recruitChoice = null; p.recruitPending = !p.eliminated;
+                p.ready = false; p.moveUntil = 0;p.steveNavigating=false; p.recruitChoice = null; p.recruitPending = !p.eliminated;
+                p.tactics.Clear();p.commanderUses=2;p.commanderCooldown=0;
                 p.steve = LocalToWorld(p.slot, 0, 390);
-                if (p.eliminated) { p.shop = new string[0]; p.recruitOfferId = null; p.market.Clear(); continue; }
+                if (p.eliminated) { p.units.Clear();p.shop = new string[0]; p.recruitOfferId = null; p.market.Clear(); continue; }
                 if (first)
                 {
                     p.hp = 20; p.units.Clear();
@@ -311,9 +368,8 @@ namespace BlockArena.Core
         }
         private void BeginPrep()
         {
-            State.phase = "prep"; State.timeLeft = PrepSeconds; readyElapsed = 0;
+            State.phase = "prep"; readyElapsed = 0;
             State.message = "招募完成，自由布阵后准备开战";
-            foreach (PlayerState p in Living()) p.botAt = clock + .6f + Rng() * .6f;
         }
         private void Choose(PlayerState p, int index)
         {
@@ -324,7 +380,7 @@ namespace BlockArena.Core
         }
         private void FinishRecruit(PlayerState p)
         {
-            p.recruitPending = false; p.ready = false;
+            p.recruitPending = false; p.ready = false;p.botAt=clock+.6f+Rng()*.6f;
             if (Living().All(player => !player.recruitPending)) BeginPrep();
         }
         private void AutoRecruit(PlayerState p)
@@ -393,17 +449,20 @@ namespace BlockArena.Core
                 foreach (UnitState u in p.units) State.fighters.Add(NewFighter(p, u));
             }
             State.leaderId = SelectBattleLeader();
-            SpawnRoundEvent();
+            State.roundEvent=null;
+            PrepareBattlePlans();StartBattlefieldCombat();
         }
-        private void Effect(string type, float x, float y, int slot, float value = 0, float tx = 0, float ty = 0)
+        private void Effect(string type, float x, float y, int slot, float value = 0, float tx = 0, float ty = 0,
+            FighterState source = null, FighterState target = null)
         {
-            State.effects.Add(new EffectState { id = Id("e"), type = type, x = x, y = y, slot = slot, value = value, targetX = tx, targetY = ty });
+            State.effects.Add(new EffectState { id = Id("e"), type = type, x = x, y = y, slot = slot, value = value, targetX = tx, targetY = ty,
+                sourceId = source == null ? null : source.id, targetId = target == null ? null : target.id, kind = source == null ? null : source.kind });
             if (State.effects.Count > 600) State.effects.RemoveRange(0, State.effects.Count - 600);
         }
         private void Kill(FighterState f)
         {
             if (f.dead) return;
-            f.dead = true; f.hp = 0; Effect("death", f.x, f.y, f.slot);
+            f.dead = true; f.hp = 0; Effect("death", f.x, f.y, f.slot, source: f, target: f);
             if (!f.neutral) CreatureAbilities.OnDeath(f, State.fighters, Damage, AbilityEffect, Summon);
         }
         private void Summon(FighterState source, string kind, int count)
@@ -416,23 +475,27 @@ namespace BlockArena.Core
                 var unit = new UnitState { id = source.unitId, kind = kind, x = Clamp(source.x + (i - (count - 1) * .5f) * 24, -410, 410), y = source.y };
                 FighterState child = NewFighter(p, unit, mini); child.summoned = true;
                 if (!mini) { child.scale *= .8f; child.hp = child.maxHp *= .65f; }
-                State.fighters.Add(child); Effect("spawn", child.x, child.y, child.slot);
+                CacheBattlefieldStats(child);NormalizeBattlefieldPosition(child);
+                State.fighters.Add(child); Effect("spawn", child.x, child.y, child.slot, source: source, target: child);
             }
         }
         private void AbilityEffect(string type, FighterState source, FighterState target, float value)
-        { Effect(type, source.x, source.y, source.slot, value, target == null ? source.x : target.x, target == null ? source.y : target.y); }
+        { Effect(type, source.x, source.y, source.slot, value, target == null ? source.x : target.x, target == null ? source.y : target.y,
+            source, target ?? source); }
         private void Damage(FighterState target, float amount, FighterState attacker)
         {
             if (target.dead || damageDepth >= 8 || !Finite(amount) || amount <= 0) return;
             damageDepth++;
             try
             {
+                amount=ModifyBattlefieldDamage(target,amount,attacker);
                 amount = CreatureAbilities.BeforeDamage(target, amount, attacker);
                 if (amount <= 0) return;
                 float actual = Math.Min(target.hp, amount);
                 target.hp = Math.Max(0, target.hp - amount);
                 if (attacker != null && attacker.ownerId != target.ownerId) target.lastAttackerId = attacker.ownerId;
-                Effect("hit", target.x, target.y, attacker == null ? target.slot : attacker.slot, (float)Math.Floor(actual + .5f));
+                Effect("hit", target.x, target.y, attacker == null ? target.slot : attacker.slot, (float)Math.Floor(actual + .5f),
+                    source: attacker, target: target);
                 if (target.hp <= 0)
                 {
                     RewardDefeat(target, attacker);
@@ -444,12 +507,12 @@ namespace BlockArena.Core
         }
         private FighterState ChooseTarget(FighterState f)
         {
+            FighterState priority=PreferredCommanderTarget(f);
+            if(priority!=null&&!priority.dead&&CanBattlefieldTarget(f,priority)){f.targetId=priority.id;f.think=.3f;return priority;}
             FighterState chosen = null; float best = Single.PositiveInfinity;
-            string bossTarget = f.neutral ? BossTargetOwner() : null;
             foreach (FighterState other in State.fighters)
             {
-                if (other.dead || other.ownerId == f.ownerId) continue;
-                if (f.neutral && (other.neutral || other.ownerId != bossTarget)) continue;
+                if (other.dead || other.ownerId == f.ownerId || !CanBattlefieldTarget(f,other)) continue;
                 float score = Distance(f, other);
                 if (f.kind == "spider" && other.kind == "skeleton") score *= .64f;
                 if (score < best) { best = score; chosen = other; }
@@ -493,11 +556,14 @@ namespace BlockArena.Core
         }
         private void Attack(FighterState f, FighterState target)
         {
+            f.hidden=false;if(State.battlefield!=null)f.revealUntil=State.battlefield.elapsed+2;
             f.attackCooldown = 1 / f.attackSpeed; f.attackTime = .24f;
             CreatureAbilities.Attack(f, target, State.fighters, Damage, AbilityEffect, Summon);
+            if(State.battlefield!=null)foreach(var displaced in State.fighters)NormalizeBattlefieldPosition(displaced);
         }
         private void CombatTick(float dt)
         {
+            TickBattlefield(dt);
             List<FighterState> current = State.fighters.FindAll(f => !f.dead);
             Dictionary<string, FighterState> byId = current.ToDictionary(f => f.id);
             Dictionary<long, List<FighterState>> grid = SpatialGrid(current);
@@ -508,27 +574,34 @@ namespace BlockArena.Core
                 f.attackTime = Math.Max(0, f.attackTime - dt); f.attackCooldown = Math.Max(0, f.attackCooldown - dt); f.think -= dt;
                 // The gold resource has no spawn bonuses or attacks, but existing poison/burn still expire and deal damage.
                 CreatureAbilities.Tick(f, State.fighters, dt, Damage, AbilityEffect);
-                if (f.dead || f.stunTime > 0) continue;
+                NormalizeBattlefieldPosition(f);
+                if (f.dead || f.stunTime > 0 || f.isDecoy) continue;
                 if (f.neutral && f.attack <= 0) continue;
                 FighterState target = null;
                 if (f.targetId != null) byId.TryGetValue(f.targetId, out target);
-                if (target == null || target.dead || f.think <= 0 || f.neutral) target = ChooseTarget(f);
-                if (target == null) continue;
-                float dist = Distance(f, target), range = f.range + (f.range > 70 ? 0 : target.radius * .55f);
-                if (dist <= range && f.attackCooldown <= 0) Attack(f, target);
+                if (target == null || target.dead || !CanBattlefieldTarget(f,target) || f.think <= 0 || f.neutral) target = ChooseTarget(f);
+                Point2 destination;bool hold;
+                bool planned=TacticDestination(f,dt,out destination,out hold);
+                float dist=target==null?Single.PositiveInfinity:Distance(f,target);
+                float range=f.range+(f.range>70||target==null?0:target.radius*.55f);
+                if(target!=null&&dist<=range&&f.attackCooldown<=0)Attack(f,target);
                 if (f.dead) continue;
+                if(f.rootTime>0)continue;
                 Point2 repel = Separation(f, grid); float vx = repel.x, vy = repel.y;
-                if (dist > range * .95f)
+                if(!planned)destination=target==null?new Point2(0,0):new Point2(target.x,target.y);
+                if (!hold && (planned?Distance(f.x,f.y,destination.x,destination.y)>14:target==null||dist>range*.95f))
                 {
-                    float dx = (target.x - f.x) / Math.Max(1, dist), dy = (target.y - f.y) / Math.Max(1, dist);
+                    Point2 waypoint=BattlefieldWaypoint(f,destination);
+                    float travel=Distance(f.x,f.y,waypoint.x,waypoint.y);
+                    float dx = (waypoint.x - f.x) / Math.Max(1, travel), dy = (waypoint.y - f.y) / Math.Max(1, travel);
                     float flank = f.kind == "spider" && dist > 75 ? f.side * .55f : 0;
                     vx += (dx - dy * flank) * f.speed * f.slowMultiplier; vy += (dy + dx * flank) * f.speed * f.slowMultiplier;
                 }
                 float velocity = (float)Math.Sqrt(vx * vx + vy * vy), limit = f.speed * 1.3f * f.slowMultiplier;
                 if (velocity > limit) { vx *= limit / velocity; vy *= limit / velocity; }
-                f.x = Clamp(f.x + vx * dt, -410, 410); f.y = Clamp(f.y + vy * dt, -410, 410);
+                Point2 moved=MoveOnBattlefield(f,new Point2(Clamp(f.x+vx*dt,-410,410),Clamp(f.y+vy*dt,-410,410)));
+                f.x=moved.x;f.y=moved.y;
             }
-            UpdateRoundEvent();
             HashSet<string> alive = new HashSet<string>(State.fighters.Where(f => !f.dead && !f.neutral && participants.Contains(f.ownerId)).Select(f => f.ownerId));
             HashSet<string> already = new HashSet<string>(defeats.SelectMany(g => g.ids));
             List<string> newlyDefeated = participants.Where(id => !alive.Contains(id) && !already.Contains(id)).ToList();
@@ -589,29 +662,32 @@ namespace BlockArena.Core
         public GameState SnapshotFor(string playerId)
         {
             GameState copy = new GameState { hostId = State.hostId, phase = State.phase, winnerId = State.winnerId, message = State.message, round = State.round, leaderId = State.leaderId,
-                roundEvent = CopyRoundEvent(State.roundEvent),
+                roundEvent = null,battlefield=CopyBattlefield(State.battlefield,playerId),preferredMap=State.preferredMap,preferredWeather=State.preferredWeather,revealStage=State.revealStage,revealStageAge=State.revealStageAge,
                 timeLeft = State.phase == "prep" && readyElapsed > 0 ? Math.Min(State.timeLeft, Math.Max(0, 1 - readyElapsed)) : State.timeLeft };
             foreach (PlayerState p in State.players)
             {
                 PlayerState player = new PlayerState { id = p.id, name = p.name, slot = p.slot, hp = p.hp, ready = p.ready, bot = p.bot, connected = p.connected,
-                    eliminated = p.eliminated, recruitPending = p.recruitPending, recruitChoice = p.recruitChoice, steve = p.steve,
+                    eliminated = p.eliminated, recruitPending = p.recruitPending, recruitChoice = p.recruitChoice, steve = p.steve,steveDestination=p.steveDestination,steveNavigating=p.steveNavigating,
                     gold = p.gold, roundKills = p.roundKills, totalKills = p.totalKills, lastIncome = p.lastIncome, killIncome = p.killIncome,
                     rankIncome = p.rankIncome, baseIncome = p.baseIncome, lastRank = p.lastRank, shopRefreshLeft = p.id == playerId ? p.shopRefreshLeft : 0,
                     bountyKills = p.bountyKills, bountyIncome = p.bountyIncome, eventIncome = p.eventIncome,
-                    recruitOfferId = p.id == playerId ? p.recruitOfferId : null,
+                    recruitOfferId = p.id == playerId ? p.recruitOfferId : null,commanderSkill=p.commanderSkill,commanderUses=p.commanderUses,commanderCooldown=p.commanderCooldown,
                     shop = p.id == playerId ? (string[])p.shop.Clone() : null };
                 player.upgrades.AddRange(p.upgrades);
+                if(p.id==playerId)player.tactics.AddRange(p.tactics.Select(CopyTacticPlan));
                 if (p.id == playerId) foreach (ShopOffer offer in p.market) player.market.Add(new ShopOffer { id = offer.id, kind = offer.kind, itemId = offer.itemId, price = offer.price, sold = offer.sold });
-                foreach (UnitState u in p.units) player.units.Add(new UnitState { id = u.id, kind = u.kind, x = u.x, y = u.y, placementId = u.placementId, paidPrice = u.paidPrice });
+                if(!p.eliminated)foreach (UnitState u in p.units) player.units.Add(new UnitState { id = u.id, kind = u.kind, x = u.x, y = u.y, placementId = u.placementId, paidPrice = u.paidPrice });
                 copy.players.Add(player);
             }
-            foreach (FighterState f in State.fighters) copy.fighters.Add(new FighterState { id = f.id, unitId = f.unitId, ownerId = f.ownerId, kind = f.kind, slot = f.slot,
+            var invisible=new HashSet<string>(State.fighters.Where(f=>!VisibleToPlayer(f,playerId)).Select(f=>f.id));
+            foreach (FighterState f in State.fighters){if(invisible.Contains(f.id))continue;copy.fighters.Add(new FighterState { id = f.id, unitId = f.unitId, ownerId = f.ownerId, kind = f.kind, slot = f.slot,
                 x = f.x, y = f.y, hp = f.hp, maxHp = f.maxHp, scale = f.scale, attackTime = f.attackTime, dead = f.dead, neutral = f.neutral,
                 attack = f.attack, attackSpeed = f.attackSpeed, range = f.range, speed = f.speed,
                 skills = (string[])f.skills.Clone(), armor = f.armor, shield = f.shield,
-                poisonTime = f.poisonTime, burnTime = f.burnTime, slowTime = f.slowTime, stunTime = f.stunTime, summoned = f.summoned });
-            foreach (EffectState e in State.effects) copy.effects.Add(new EffectState { id = e.id, type = e.type, x = e.x, y = e.y, age = e.age,
-                targetX = e.targetX, targetY = e.targetY, slot = e.slot, value = e.value });
+                poisonTime = f.poisonTime, burnTime = f.burnTime, slowTime = f.slowTime, stunTime = f.stunTime, summoned = f.summoned,hidden=f.hidden,rootTime=f.rootTime,resistanceTime=f.resistanceTime });}
+            foreach (EffectState e in State.effects){if((e.sourceId!=null&&invisible.Contains(e.sourceId))||(e.targetId!=null&&invisible.Contains(e.targetId)))continue;copy.effects.Add(new EffectState { id = e.id, type = e.type, x = e.x, y = e.y, age = e.age,
+                targetX = e.targetX, targetY = e.targetY, slot = e.slot, value = e.value,
+                sourceId = e.sourceId, targetId = e.targetId, kind = e.kind });}
             foreach (PlacementState p in State.placements) copy.placements.Add(new PlacementState { playerId = p.playerId, rank = p.rank, damage = p.damage,
                 kills = p.kills, income = p.income, baseIncome = p.baseIncome, killIncome = p.killIncome, rankIncome = p.rankIncome,
                 bountyKills = p.bountyKills, bountyIncome = p.bountyIncome, eventIncome = p.eventIncome });

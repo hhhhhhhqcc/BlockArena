@@ -4,6 +4,7 @@
 /Logs/
 /UserSettings/
 /Builds/
+/Releases/
 /.vs/
 *.csproj
 *.sln

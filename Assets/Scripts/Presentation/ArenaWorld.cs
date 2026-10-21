@@ -21,7 +21,6 @@ namespace BlockArena.Presentation
         readonly Dictionary<string,int> observedPlayerHealth=new Dictionary<string,int>();
         readonly Dictionary<string,int> hitRounds=new Dictionary<string,int>();
         readonly List<CommanderImpact> commanderImpacts=new List<CommanderImpact>();
-        readonly RaycastHit[] pickHits=new RaycastHit[24];
         readonly Transform[] preparations=new Transform[4];
         Transform scenery,battleScenery,creatureRoot,effectRoot;Camera viewCamera;ParticleSystem sparks;
         GameState state;string playerId,selectedId,dragId;Point2? dragPosition;
@@ -53,10 +52,11 @@ namespace BlockArena.Presentation
             if(FindObjectOfType<AudioListener>()==null)cameraObject.AddComponent<AudioListener>();
             GameObject sunObject=new GameObject("Warm afternoon sun");sunObject.transform.SetParent(transform,false);Light sun=sunObject.AddComponent<Light>();sun.type=LightType.Directional;sun.color=VoxelAssets.Hex("#FFF1CB");sun.intensity=1.05f;sun.shadows=LightShadows.Soft;sun.shadowStrength=.62f;sun.shadowBias=.035f;sun.shadowNormalBias=.25f;sunObject.transform.rotation=Quaternion.Euler(48,-34,0);
             scenery=NewRoot("Arena scenery",transform);battleScenery=NewRoot("Octagonal arena",scenery);creatureRoot=NewRoot("Pooled creatures",transform);effectRoot=NewRoot("Pooled effects",transform);
-            BuildLandscape();BuildArena();for(int slot=0;slot<4;slot++)BuildPreparation(slot);BuildParticles();BuildDemo();UpdateCamera(.016f,true);
+            BuildLandscape();BuildArena();for(int slot=0;slot<4;slot++)BuildPreparation(slot);BuildParticles();BuildDemo();UpdateCamera(.016f,true);SetFrontend("main");
         }
         static Transform NewRoot(string name,Transform parent){Transform t=new GameObject(name).transform;t.SetParent(parent,false);return t;}
         static Vector3 Position(float x,float y){return new Vector3(x*WorldScale,.06f,y*WorldScale);}
+        public Vector3 WorldSurfacePoint(float x,float y){return Position(x,y)+Vector3.up*(solo?0:BattlefieldVisualHeight(x,y));}
         static Vector3 Rotate(int slot,Vector3 local){return Quaternion.Euler(0,-90*slot,0)*local;}
         Transform MeshObject(string name,Transform parent,Action<VoxelMesh> build){VoxelMesh b=new VoxelMesh();build(b);return VoxelAssets.Part(parent,name,b.Finish(name),Vector3.zero);}
 
@@ -140,22 +140,32 @@ namespace BlockArena.Presentation
         }
         public void SetState(GameState next,string viewerId)
         {
+            bool covered=next!=null&&KeepFrontendForStateUpdates&&BeginSettingsGameplayUpdate();
+            try{SetGameplayState(next,viewerId);}
+            finally{if(covered)EndSettingsGameplayUpdate();}
+        }
+        void SetGameplayState(GameState next,string viewerId)
+        {
             if(!initialized)Initialize();state=next;playerId=viewerId;
             if(next==null){Clear();return;}
+            if(next.phase!="lobby"&&FrontendMode!=null&&!(KeepFrontendForStateUpdates&&FrontendMode=="settings"))SetFrontend(null);
             PlayerState local=null;for(int i=0;i<next.players.Count;i++)if(next.players[i].id==viewerId){local=next.players[i];break;}
             if(local!=null)localSlot=local.slot;
             bool nextSolo=local!=null&&!local.eliminated&&(next.phase=="prep"||next.phase=="recruit");
             bool battle=next.phase=="battle"||next.phase=="results"||next.phase=="finished";
             if(nextSolo!=solo){ReleaseAll();ClearEffects();panOffset=Vector3.zero;}solo=nextSolo;
             battleScenery.gameObject.SetActive(!solo);for(int i=0;i<4;i++)preparations[i].gameObject.SetActive(!solo||i==localSlot);
+            SyncBattlefieldPresentation(next,viewerId);
             fighterViews.Clear();
             foreach(VoxelCreature v in creatures.Values)v.Seen=false;
             for(int i=0;i<next.players.Count;i++){
                 PlayerState p=next.players[i];if(solo&&p.id!=viewerId)continue;
-                VoxelCreature steve=Get("steve:"+p.id,"steve",p.slot,Position(p.steve.x,p.steve.y));steve.Battle=false;steve.Seen=true;steve.Dead=false;steve.Size=1;steve.LocalCommander=p.id==viewerId;
-                if(!battle){for(int u=0;u<p.units.Count;u++){UnitState unit=p.units[u];VoxelCreature v=Get("unit:"+unit.id,unit.kind,p.slot,Position(unit.x,unit.y));v.UnitId=unit.id;v.Battle=false;v.Dead=false;v.Size=CreatureSize*CreatureCatalog.Get(unit.kind).visualScale;v.Seen=true;}}
+                VoxelCreature steve=Get("steve:"+p.id,"steve",p.slot,WorldSurfacePoint(p.steve.x,p.steve.y));steve.Battle=false;steve.Seen=true;steve.Dead=false;steve.Size=1;steve.LocalCommander=p.id==viewerId;
+                // Eliminated armies stay in the saved roster for settlement/history only.
+                // They must never be rebuilt on their old terrace in the next planning phase.
+                if(!battle&&!p.eliminated&&p.hp>0){for(int u=0;u<p.units.Count;u++){UnitState unit=p.units[u];VoxelCreature v=Get("unit:"+unit.id,unit.kind,p.slot,WorldSurfacePoint(unit.x,unit.y));v.UnitId=unit.id;v.Battle=false;v.Dead=false;v.Size=CreatureSize*CreatureCatalog.Get(unit.kind).visualScale;v.Seen=true;}}
             }
-            if(battle){for(int i=0;i<next.fighters.Count;i++){FighterState f=next.fighters[i];VoxelCreature v=Get("fighter:"+f.id,f.kind,f.slot,Position(f.x,f.y));v.UnitId=f.unitId;v.Battle=true;v.Health=f.hp;v.MaximumHealth=f.maxHp;v.Attack=f.attackTime;v.Size=Mathf.Max(.3f,f.scale)*CreatureSize*CreatureCatalog.Get(f.kind).visualScale;v.Dead=f.dead;v.Seen=true;fighterViews[v]=f;}}
+            if(battle){for(int i=0;i<next.fighters.Count;i++){FighterState f=next.fighters[i];VoxelCreature v=Get("fighter:"+f.id,f.kind,f.slot,WorldSurfacePoint(f.x,f.y));v.UnitId=f.unitId;v.Battle=true;v.Health=f.hp;v.MaximumHealth=f.maxHp;v.Attack=f.attackTime;v.Size=Mathf.Max(.3f,f.scale)*CreatureSize*CreatureCatalog.Get(f.kind).visualScale;v.Dead=f.dead;v.Seen=true;fighterViews[v]=f;}}
             stale.Clear();foreach(KeyValuePair<string,VoxelCreature> item in creatures)if(!item.Value.Seen)stale.Add(item.Key);for(int i=0;i<stale.Count;i++)Release(stale[i]);
             ObserveCommanderHealth(next,viewerId);
             for(int i=0;i<next.players.Count;i++){
@@ -164,6 +174,7 @@ namespace BlockArena.Presentation
             }
             skillStateRevision++;
             SyncArenaEventPresentation(next,viewerId);
+            SyncCombatShields();
             if(next.effects!=null)for(int i=0;i<next.effects.Count;i++)ProcessEffect(next.effects[i]);
         }
         void ObserveCommanderHealth(GameState next,string viewerId)
@@ -192,18 +203,22 @@ namespace BlockArena.Presentation
             if(pool.Count>0)v=pool.Pop();else{GameObject g=new GameObject(kind);g.transform.SetParent(creatureRoot,false);v=g.AddComponent<VoxelCreature>();v.Build(kind);}
             v.ResetVisual(key,slot,at);creatures[key]=v;return v;
         }
-        void Release(string key){VoxelCreature v;if(!creatures.TryGetValue(key,out v))return;if(hovered==v)SetHovered(null);creatures.Remove(key);fighterViews.Remove(v);v.gameObject.SetActive(false);pools[v.Kind].Push(v);}
-        void ReleaseAll(){SetHovered(null);foreach(VoxelCreature v in creatures.Values){v.gameObject.SetActive(false);pools[v.Kind].Push(v);}creatures.Clear();fighterViews.Clear();}
-        public void Clear(){if(!initialized)return;ReleaseAll();ClearEffects();ClearSkillHighlight();ResetArenaEventPresentation();observedPlayerHealth.Clear();hitRounds.Clear();observedRound=-1;observedViewer=observedPhase=null;commanderHitCount=0;state=null;selectedId=dragId=null;dragPosition=null;solo=false;localSlot=0;battleScenery.gameObject.SetActive(true);for(int i=0;i<4;i++)preparations[i].gameObject.SetActive(true);BuildDemo();}
+        void Release(string key){VoxelCreature v;if(!creatures.TryGetValue(key,out v))return;if(hovered==v)SetHovered(null);if(pinnedCreature==v)pinnedCreature=null;creatures.Remove(key);fighterViews.Remove(v);v.gameObject.SetActive(false);pools[v.Kind].Push(v);}
+        void ReleaseAll(){SetHovered(null);pinnedCreature=null;foreach(VoxelCreature v in creatures.Values){v.gameObject.SetActive(false);pools[v.Kind].Push(v);}creatures.Clear();fighterViews.Clear();ResetTargetingPresentation();}
+        public void Clear(){if(!initialized)return;KeepFrontendForStateUpdates=false;SetFrontend(null);ReleaseAll();ClearEffects();ClearSkillHighlight();ResetArenaEventPresentation();ResetBattlefieldPresentation();observedPlayerHealth.Clear();hitRounds.Clear();observedRound=-1;observedViewer=observedPhase=null;commanderHitCount=0;state=null;selectedId=dragId=null;dragPosition=null;solo=false;localSlot=0;battleScenery.gameObject.SetActive(true);for(int i=0;i<4;i++)preparations[i].gameObject.SetActive(true);BuildDemo();SetFrontend("main");}
         public bool TryPickUnit(Vector2 screen,out string unitId)
         {
-            unitId=null;if(viewCamera==null||state==null)return false;Ray ray=viewCamera.ScreenPointToRay(screen);int count=Physics.RaycastNonAlloc(ray,pickHits,180,1<<8);float nearest=float.MaxValue;
-            for(int i=0;i<count;i++){VoxelCreature v=pickHits[i].collider.GetComponent<VoxelCreature>();if(v!=null&&v.Slot==localSlot&&v.Kind!="steve"&&!v.Dead&&pickHits[i].distance<nearest){unitId=v.UnitId;nearest=pickHits[i].distance;}}
-            return unitId!=null;
+            unitId=null;VoxelCreature visual;
+            // Ownership is checked after finding the frontmost visible body: an enemy
+            // must not let a click pass through it and grab a friendly behind it.
+            if(!TryPickVisibleBody(screen,out visual)||visual.Slot!=localSlot)return false;
+            unitId=visual.UnitId;return !string.IsNullOrEmpty(unitId);
         }
         public bool TryGround(Vector2 screen,out Point2 world)
         {
-            world=new Point2();if(viewCamera==null)return false;Ray ray=viewCamera.ScreenPointToRay(screen);float distance;if(!new Plane(Vector3.up,Vector3.zero).Raycast(ray,out distance))return false;Vector3 p=ray.GetPoint(distance);world=new Point2(p.x/WorldScale,p.z/WorldScale);return true;
+            world=new Point2();if(viewCamera==null||FrontendMode!=null)return false;Vector3 point;
+            if(!TryIntersectWalkableSurface(viewCamera.ScreenPointToRay(screen),out point))return false;
+            world=new Point2(point.x/WorldScale,point.z/WorldScale);return true;
         }
         public bool TryGetUnitPosition(string unitId,out Point2 position)
         {
@@ -211,15 +226,21 @@ namespace BlockArena.Presentation
             if(creatures.TryGetValue("unit:"+unitId,out visual)) {position=new Point2(visual.transform.position.x/WorldScale,visual.transform.position.z/WorldScale);return true;}
             position=new Point2();return false;
         }
+        public bool TryGetUnitSelectionPoint(string unitId,out Vector3 point)
+        {
+            VoxelCreature visual;
+            if(creatures.TryGetValue("unit:"+unitId,out visual)&&!visual.Dead&&visual.gameObject.activeInHierarchy){
+                // Species have very different silhouettes. Use the animated body bounds,
+                // not a capsule which becomes a tall sphere for flat, wide creatures.
+                Bounds body;point=TryGetBodyBounds(visual,out body)?body.center:visual.CombatEffectCenter;
+                return true;
+            }
+            point=Vector3.zero;return false;
+        }
         public bool TryInspectCreature(Vector2 screen,out VoxelCreature visual,out FighterState fighter)
         {
-            visual=null;fighter=null;if(viewCamera==null||state==null)return false;
-            int count=Physics.RaycastNonAlloc(viewCamera.ScreenPointToRay(screen),pickHits,180,1<<8);float nearest=float.MaxValue;
-            for(int i=0;i<count;i++){
-                VoxelCreature v=pickHits[i].collider.GetComponent<VoxelCreature>();
-                if(v!=null&&v.Kind!="steve"&&!v.Dead&&pickHits[i].distance<nearest){visual=v;nearest=pickHits[i].distance;}
-            }
-            if(visual==null)return false;fighterViews.TryGetValue(visual,out fighter);return true;
+            fighter=null;if(!TryPickVisibleBody(screen,out visual))return false;
+            fighterViews.TryGetValue(visual,out fighter);return true;
         }
         public void SetHovered(VoxelCreature visual)
         {
@@ -227,11 +248,11 @@ namespace BlockArena.Presentation
         }
         public void SetSelectedUnit(string unitId){selectedId=unitId;}
         public void SetDrag(string unitId,Point2? world){dragId=unitId;dragPosition=world;}
-        public Vector2 LocalMovementToWorld(Vector2 movement){Vector3 v=Rotate(localSlot,new Vector3(movement.x,0,movement.y));return new Vector2(v.x,v.z);}
+        public Vector2 LocalMovementToWorld(Vector2 movement){return BlockArena.Runtime.ArenaApp.ScreenMovementToWorld(movement,viewCamera==null?Quaternion.identity:viewCamera.transform.rotation);}
         public float ZoomFactor { get { return solo?preparationZoom:battleZoom; } }
         public void Zoom(float wheel,Vector2 screen)
         {
-            if(viewCamera==null||Mathf.Abs(wheel)<.001f)return;
+            if(viewCamera==null||FrontendMode!=null||Mathf.Abs(wheel)<.001f)return;
             float before=ZoomFactor,after=Mathf.Clamp(before*Mathf.Exp(-wheel*.12f),.48f,1.35f);
             Point2 anchor;if(TryGround(screen,out anchor))panOffset+=(Position(anchor.x,anchor.y)-cameraFocus)*(1-after/before);
             if(solo)preparationZoom=after;else battleZoom=after;
@@ -239,7 +260,7 @@ namespace BlockArena.Presentation
         }
         public void Pan(Vector2 delta)
         {
-            if(viewCamera==null)return;
+            if(viewCamera==null||FrontendMode!=null)return;
             Vector3 up=viewCamera.transform.up;up.y=0;up.Normalize();
             panOffset-= (viewCamera.transform.right*delta.x+up*delta.y)*cameraSize*.035f;
             ClampPan();
@@ -249,17 +270,31 @@ namespace BlockArena.Presentation
         void Update()
         {
             if(!initialized)return;float dt=Mathf.Clamp(Time.unscaledDeltaTime,0,.08f),time=Time.unscaledTime;
-            UpdateCommanderImpacts();UpdateCamera(dt,false);
+            if(FrontendMode!=null){
+                if(FrontendMode!="settings"||state==null||state.phase=="lobby"){UpdateFrontend(time);return;}
+                bool covered=BeginSettingsGameplayUpdate();
+                try{UpdateGameplayPresentation(dt,time);}
+                finally{if(covered)EndSettingsGameplayUpdate();}
+                return;
+            }
+            UpdateGameplayPresentation(dt,time);
+        }
+        void UpdateGameplayPresentation(float dt,float time)
+        {
+            UpdateBattlefieldPresentation(dt,time);UpdateCommanderImpacts();UpdateCamera(dt,false);
             foreach(VoxelCreature v in creatures.Values){
                 Vector3? drag=null;
                 if(!v.Battle&&v.Kind!="steve"){
                     Point2? preview=PlacementPosition==null?null:PlacementPosition(v.UnitId);
-                    if(preview.HasValue)drag=Position(preview.Value.x,preview.Value.y);
-                    if(v.UnitId==dragId&&dragPosition.HasValue)drag=Position(dragPosition.Value.x,dragPosition.Value.y);
+                    if(preview.HasValue&&v.Slot==localSlot)drag=WorldSurfacePoint(preview.Value.x,preview.Value.y);
+                    if(v.UnitId==dragId&&dragPosition.HasValue)drag=WorldSurfacePoint(dragPosition.Value.x,dragPosition.Value.y);
                 }
-                v.Step(dt,time,viewCamera,v.UnitId==selectedId,drag);
+                v.SuppressSelectionRing=state!=null&&state.phase=="tactics"&&v.Kind!="steve";
+                v.Step(dt,time,viewCamera,v.UnitId==selectedId||(state!=null&&state.phase=="tactics"&&tacticalSelection.Contains(v.UnitId))||v==pinnedCreature,drag);
             }
+            UpdateTargetingPresentation(time);
             UpdateArenaEventPresentation(time);
+            UpdateCombatVfx(dt,time);
             for(int i=movingEffects.Count-1;i>=0;i--){FlyingEffect effect=movingEffects[i];effect.age=effect.soul?Mathf.Max(0,time-effect.bornAt):effect.age+dt;float t=effect.age/effect.duration;if(t>=1){effect.transform.gameObject.SetActive(false);effectPool.Push(effect);movingEffects.RemoveAt(i);continue;}
                 if(effect.number){effect.transform.position=effect.start+Vector3.up*(t*1.25f);effect.transform.rotation=viewCamera.transform.rotation;effect.transform.localScale=Vector3.one*effect.size*(1+Mathf.Sin(t*Mathf.PI)*.15f)*Mathf.Min(1,(1-t)*6);}
                 else{
@@ -291,17 +326,13 @@ namespace BlockArena.Presentation
             if(effect.type=="event_spawn"||effect.type=="event_claim")return;
             Vector3 at=Position(effect.x,effect.y)+Vector3.up*.6f;
             if(SoundCue!=null)SoundCue("combat_"+effect.type,at,Mathf.Clamp01(.2f+effect.value/50f));
-            if(effect.type=="arrow"){FlyingEffect flying=EffectObject();flying.start=at+Vector3.up*.3f;flying.end=Position(effect.targetX,effect.targetY)+Vector3.up*.65f;flying.duration=.19f;flying.number=false;flying.filter.sharedMesh=VoxelAssets.Cached("arrow",b=>{b.Box(Vector3.zero,new Vector3(.045f,.045f,.65f),VoxelAssets.Hex("#DCC797"));b.Box(new Vector3(0,0,.34f),new Vector3(.12f,.1f,.13f),VoxelAssets.Hex("#B8C7C5"));});flying.transform.localScale=Vector3.one;return;}
-            int count=effect.type=="explode"?34:effect.type=="death"?14:effect.type=="heal"?6:5;
-            Color color=effect.type=="explode"?VoxelAssets.Hex("#F7BF72"):effect.type=="heal"?VoxelAssets.Hex("#A3E7A3"):effect.type=="death"?(effect.slot<0?VoxelAssets.Hex("#F4C366"):Teams[Mathf.Clamp(effect.slot,0,3)]):VoxelAssets.Hex("#E8D8AB");
-            for(int i=0;i<count;i++){ParticleSystem.EmitParams emit=new ParticleSystem.EmitParams();emit.position=at;Vector3 velocity=UnityEngine.Random.insideUnitSphere*(effect.type=="explode"?5:2);velocity.y=Mathf.Abs(velocity.y)+1;emit.velocity=velocity;emit.startColor=color;emit.startSize=effect.type=="explode"? 0.19f: 0.1f;emit.startLifetime=effect.type=="explode"? 0.65f: 0.35f;sparks.Emit(emit,1);}
-            if(effect.type=="hit"&&effect.value>0){FlyingEffect number=EffectObject();number.start=at+Vector3.up*.6f;number.end=number.start;number.duration=.72f;number.number=true;number.filter.sharedMesh=VoxelAssets.DamageNumber(Mathf.RoundToInt(effect.value));number.transform.rotation=viewCamera.transform.rotation;number.transform.localScale=Vector3.one;}
+            PlayCombatEffect(effect);
         }
         FlyingEffect EffectObject()
         {
             FlyingEffect effect;if(effectPool.Count>0)effect=effectPool.Pop();else{GameObject g=new GameObject("Pooled combat effect");g.transform.SetParent(effectRoot,false);effect=new FlyingEffect{transform=g.transform,filter=g.AddComponent<MeshFilter>()};MeshRenderer r=g.AddComponent<MeshRenderer>();r.sharedMaterial=VoxelAssets.Glow;r.shadowCastingMode=ShadowCastingMode.Off;r.receiveShadows=false;}
             effect.age=effect.nextTrail=0;effect.bornAt=Time.unscaledTime;effect.size=1;effect.number=effect.soul=false;effect.targetKey=null;effect.transform.localScale=Vector3.one;effect.transform.gameObject.SetActive(true);movingEffects.Add(effect);return effect;
         }
-        void ClearEffects(){seenEffects.Clear();commanderImpacts.Clear();ResetRitual();for(int i=0;i<movingEffects.Count;i++){movingEffects[i].transform.gameObject.SetActive(false);effectPool.Push(movingEffects[i]);}movingEffects.Clear();if(sparks!=null)sparks.Clear();}
+        void ClearEffects(){ClearCombatVfxForVerification();commanderImpacts.Clear();ResetRitual();for(int i=0;i<movingEffects.Count;i++){movingEffects[i].transform.gameObject.SetActive(false);effectPool.Push(movingEffects[i]);}movingEffects.Clear();if(sparks!=null)sparks.Clear();}
     }
 }

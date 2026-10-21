@@ -8,149 +8,184 @@ namespace BlockArena.Runtime
 {
     public sealed partial class ArenaHud
     {
-        const float InspectionDelay = 1;
-        sealed class InspectionSkill
-        {
-            internal string id, name, icon, plain, rich;
-            internal float height;
-        }
+        sealed class InspectionSkill { internal string id, name, icon; }
         readonly List<InspectionSkill> inspectionSkills = new List<InspectionSkill>();
-        readonly List<KeyValuePair<string,string>> inspectionStates = new List<KeyValuePair<string,string>>();
-        readonly Spring inspectionReveal = new Spring();
         string inspectionSubject, inspectionTeam, inspectionKind, inspectionSkillPlain = "";
-        bool inspectionIsFighter;
-        int inspectionRound;
-        float inspectionStarted;
+        string pinnedInspectionId, pinnedInspectionOwner;
+        int pinnedInspectionRound;
+        Vector2 pinnedSkillScroll;
         Rect inspectionTooltip;
-        internal bool InspectionExpanded { get { return inspectionDefinition != null && inspectionSubject != null && Time.unscaledTime <= hoverUntil && Time.unscaledTime - inspectionStarted >= InspectionDelay; } }
+        public string PinnedInspectionId { get { return pinnedInspectionId; } }
+        public string PinnedInspectionOwnerId { get { return pinnedInspectionOwner; } }
+        internal Rect PinnedInspectionScreenRect { get { Metrics();return PinnedInspectionAvailable?ToScreenRect(PinnedInspectionRect):Rect.zero; } }
+        internal Rect PinnedDismissScreenRect { get { Metrics();if(!PinnedInspectionAvailable)return Rect.zero;Rect r=PinnedInspectionRect;return ToScreenRect(new Rect(r.x+17,r.yMax-48,r.width-32,34)); } }
+        internal int PinnedInspectionSkillCount { get { return RefreshPinnedInspection()?InspectionSkillIds(pinnedDefinition,pinnedFighter).Length:0; } }
+        internal string PinnedInspectionSkillText
+        {
+            get
+            {
+                if(!RefreshPinnedInspection())return "";
+                var text=new StringBuilder();
+                foreach(string id in InspectionSkillIds(pinnedDefinition,pinnedFighter)){
+                    var ability=CreatureAbilities.Get(id);if(text.Length>0)text.Append('\n');
+                    text.Append(ability.name).Append(" · ").Append(ArenaDescription.Brief(ability));
+                }
+                return text.ToString();
+            }
+        }
+        internal Rect PinnedInspectionSkillsScreenRect { get { Metrics();return PinnedInspectionAvailable?ToScreenRect(PinnedSkillsViewport(PinnedInspectionRect)):Rect.zero; } }
+        internal bool PinnedInspectionSkillsScrollable { get { Metrics();return PinnedInspectionAvailable&&PinnedSkillsHeight(pinnedDefinition,pinnedFighter,316)>PinnedSkillsViewport(PinnedInspectionRect).height; } }
+        internal Vector2 PinnedInspectionSkillScroll { get { return pinnedSkillScroll; } set { pinnedSkillScroll=value; } }
+        internal Rect RecruitRestoreScreenRect { get { Metrics();return ToScreenRect(RecruitRestoreRect); } }
+        internal bool InspectionExpanded { get { return inspectionDefinition != null && Time.unscaledTime <= hoverUntil; } }
         internal int InspectionSkillCount { get { return InspectionExpanded ? inspectionSkills.Count : 0; } }
         internal string InspectionSkillText { get { return InspectionExpanded ? inspectionSkillPlain : ""; } }
-        internal Rect InspectionTooltipScreenRect { get { return inspectionDefinition != null && Time.unscaledTime <= hoverUntil ? inspectionTooltip : Rect.zero; } }
+        internal Rect InspectionTooltipScreenRect { get { return InspectionExpanded ? inspectionTooltip : Rect.zero; } }
+        Rect PinnedInspectionRect { get { float h=InspectionPanelHeight(pinnedFighter,pinnedDefinition,true); float x=width-388; if(MarketVisible)x=Mathf.Max(18,MarketRect.x-388); return new Rect(x,Mathf.Clamp(338,84,Mathf.Max(84,CommandDockRect.y-h-12)),370,h); } }
+        CreatureDefinition pinnedDefinition;
+        FighterState pinnedFighter;
+        UnitState pinnedUnit;
+        PlayerState pinnedOwner;
+        bool PinnedInspectionAvailable { get { return RefreshPinnedInspection()&&!app.ShowGameMenu&&!app.ShowRoom&&!app.ShowHelp&&!app.ShowBestiary&&!RecruitVisible&&app.State.phase!="finished"&&app.State.phase!="lobby"; } }
+        bool PinnedInspectionCovers(Vector2 p) { return PinnedInspectionAvailable&&PinnedInspectionRect.Contains(p); }
 
         void ResetInspection()
         {
-            inspectionSubject = inspectionTeam = inspectionKind = null;
-            inspectionStarted = 0; inspectionTooltip = Rect.zero;
-            inspectionReveal.value = inspectionReveal.velocity = 0;
-            inspectionSkills.Clear(); inspectionSkillPlain = "";
+            inspectionSubject=inspectionTeam=inspectionKind=null;inspectionTooltip=Rect.zero;
+            inspectionSkills.Clear();inspectionSkillPlain="";
         }
-
-        void BeginInspection(CreatureDefinition definition, FighterState fighter, UnitState unit, PlayerState owner)
+        void BeginInspection(CreatureDefinition definition,FighterState fighter,UnitState unit,PlayerState owner)
         {
-            string subject = fighter != null ? fighter.id : unit != null ? unit.id : definition.id;
-            string team = owner != null ? owner.id : fighter != null ? fighter.ownerId : null;
-            int round = app.State == null ? 0 : app.State.round;
-            // Snapshots replace objects, so compare stable individual identity, not reference or species name.
-            if (inspectionSubject != subject || inspectionTeam != team || inspectionKind != definition.id ||
-                inspectionRound != round || inspectionIsFighter != (fighter != null) || Time.unscaledTime > hoverUntil) {
-                ResetInspection();
-                inspectionSubject = subject; inspectionTeam = team; inspectionKind = definition.id;
-                inspectionRound = round; inspectionIsFighter = fighter != null;
-                inspectionStarted = Time.unscaledTime;
-            }
+            string subject=fighter!=null?fighter.id:unit!=null?unit.id:definition.id;
+            string team=owner!=null?owner.id:fighter!=null?fighter.ownerId:null;
+            if(inspectionSubject!=subject||inspectionTeam!=team||inspectionKind!=definition.id){ResetInspection();inspectionSubject=subject;inspectionTeam=team;inspectionKind=definition.id;}
         }
-
+        public void PinInspection(CreatureDefinition definition,FighterState fighter,UnitState unit,PlayerState owner,Vector2 screenPosition)
+        {
+            if(definition==null||app.State==null)return;
+            pinnedInspectionId=fighter!=null?fighter.id:unit!=null?unit.id:null;
+            pinnedInspectionOwner=owner!=null?owner.id:fighter!=null?fighter.ownerId:null;
+            pinnedInspectionRound=app.State.round;pinnedDefinition=definition;pinnedFighter=fighter;pinnedUnit=unit;pinnedOwner=owner;
+            pinnedSkillScroll=Vector2.zero;
+            ClearHover();
+        }
+        public void ClosePinnedInspection(){pinnedInspectionId=pinnedInspectionOwner=null;pinnedDefinition=null;pinnedFighter=null;pinnedUnit=null;pinnedOwner=null;pinnedSkillScroll=Vector2.zero;}
+        bool RefreshPinnedInspection()
+        {
+            if(string.IsNullOrEmpty(pinnedInspectionId)||app.State==null)return false;
+            if(app.State.round!=pinnedInspectionRound||app.State.phase=="lobby"){ClosePinnedInspection();return false;}
+            pinnedOwner=app.State.players.Find(p=>p.id==pinnedInspectionOwner);
+            bool combat=app.State.phase=="battle"||app.State.phase=="results"||app.State.phase=="finished";
+            pinnedFighter=combat?app.State.fighters.Find(f=>f.id==pinnedInspectionId):null;
+            pinnedUnit=pinnedOwner==null?null:pinnedOwner.units.Find(u=>u.id==pinnedInspectionId);
+            if(combat&&pinnedFighter==null){ClosePinnedInspection();return false;}
+            if(pinnedFighter==null&&pinnedUnit==null){ClosePinnedInspection();return false;}
+            if(pinnedFighter!=null)pinnedDefinition=CreatureCatalog.Get(pinnedFighter.kind);
+            else {pinnedDefinition=CreatureCatalog.Get(pinnedUnit.kind);pinnedFighter=ArenaGame.PreviewFighter(pinnedOwner,pinnedUnit);}
+            return pinnedDefinition!=null;
+        }
         void CacheInspectionSkills()
         {
-            string[] ids = inspectionFighter != null && inspectionFighter.neutral ? inspectionFighter.skills : inspectionFighter != null && inspectionFighter.skills != null && inspectionFighter.skills.Length > 0 ? inspectionFighter.skills : inspectionDefinition.skills;
-            int count = ids == null ? 0 : ids.Length;
-            bool changed = count != inspectionSkills.Count;
-            if (!changed) for (int i = 0; i < count; i++) if (inspectionSkills[i].id != ids[i]) { changed = true; break; }
-            if (!changed) return;
-            inspectionSkills.Clear();
-            var plain = new StringBuilder();
-            for (int i = 0; i < count; i++) {
-                AbilityDefinition a = CreatureAbilities.Get(ids[i]);
-                string brief = ArenaDescription.Brief(a);
-                string icon = AbilityIcon(a);
-                inspectionSkills.Add(new InspectionSkill { id = ids[i], name = a.name, icon = icon, plain = brief, rich = ArenaDescription.Format(brief) });
-                if (plain.Length > 0) plain.Append('\n');
-                plain.Append(a.name).Append(" · ").Append(brief);
-            }
-            inspectionSkillPlain = plain.ToString();
+            string[] ids=InspectionSkillIds(inspectionDefinition,inspectionFighter);
+            bool changed=ids.Length!=inspectionSkills.Count;if(!changed)for(int i=0;i<ids.Length;i++)if(inspectionSkills[i].id!=ids[i]){changed=true;break;}
+            if(!changed)return;inspectionSkills.Clear();var plain=new StringBuilder();
+            foreach(string id in ids){var a=CreatureAbilities.Get(id);inspectionSkills.Add(new InspectionSkill{id=id,name=a.name,icon=AbilityIcon(a)});if(plain.Length>0)plain.Append('、');plain.Append(a.name);}
+            inspectionSkillPlain=plain.ToString();
         }
-
+        static string[] InspectionSkillIds(CreatureDefinition d,FighterState f)
+        { return f!=null&&f.skills!=null&&(f.neutral||f.skills.Length>0)?f.skills:d!=null&&d.skills!=null?d.skills:new string[0]; }
         static string AbilityIcon(AbilityDefinition ability)
+        {return ability.effect=="poison"?"poison":ability.effect=="burn"?"fire":ability.effect=="slow"?"frost":ability.effect=="stun"?"stun":ability.icon=="armor"?"shield":ability.icon=="attack"?"sword":ability.icon??"book";}
+        float InspectionPanelHeight(FighterState f,CreatureDefinition d,bool pinned)
         {
-            return ability.effect == "poison" ? "poison" : ability.effect == "burn" ? "fire" : ability.effect == "slow" ? "frost" : ability.effect == "stun" ? "stun" : ability.icon == "armor" ? "shield" : ability.icon == "attack" ? "sword" : ability.icon ?? "book";
+            if(pinned){
+                float maximum=Mathf.Max(312,Mathf.Min(height-112,CommandDockRect.y-96));
+                return Mathf.Min(maximum,218+PinnedSkillsHeight(d,f,316)+66);
+            }
+            int skills=InspectionSkillIds(d,f).Length;return Mathf.Min(height-112,246+Mathf.Max(1,Mathf.CeilToInt(skills/2f))*34);
         }
-
+        static Rect PinnedSkillsViewport(Rect panel)
+        { return new Rect(panel.x+17,panel.y+218,panel.width-32,Mathf.Max(32,panel.height-280)); }
+        float PinnedSkillRowHeight(AbilityDefinition ability,float rowWidth)
+        {
+            string rich=ArenaDescription.Format(ArenaDescription.Brief(ability));
+            float body=small==null?Mathf.Ceil(Mathf.Max(1,rich.Length/18f))*22:small.CalcHeight(new GUIContent(rich),Mathf.Max(60,rowWidth-20));
+            return 31+Mathf.Max(24,body)+12;
+        }
+        float PinnedSkillsHeight(CreatureDefinition definition,FighterState fighter,float rowWidth)
+        {
+            string[] ids=InspectionSkillIds(definition,fighter);if(ids.Length==0)return 32;
+            float height=0;foreach(string id in ids)height+=PinnedSkillRowHeight(CreatureAbilities.Get(id),rowWidth);
+            return height;
+        }
+        void DrawPinnedSkillEffects(Rect panel,CreatureDefinition definition,FighterState fighter)
+        {
+            Rect viewport=PinnedSkillsViewport(panel);float rowWidth=viewport.width-22;
+            float contentHeight=PinnedSkillsHeight(definition,fighter,rowWidth);
+            pinnedSkillScroll=BeginUiScroll(viewport,pinnedSkillScroll,new Rect(0,0,rowWidth,Mathf.Max(viewport.height,contentHeight)));
+            float y=0;string[] ids=InspectionSkillIds(definition,fighter);
+            foreach(string id in ids){
+                var ability=CreatureAbilities.Get(id);float rowHeight=PinnedSkillRowHeight(ability,rowWidth);
+                RoundFill(new Rect(0,y,rowWidth,rowHeight-8),new Color(.065f,.13f,.15f),6);
+                ArenaIcons.Draw(new Rect(8,y+5,22,22),AbilityIcon(ability));
+                Text(new Rect(38,y+3,rowWidth-46,26),ability.name,small,mint);
+                Text(new Rect(10,y+31,rowWidth-20,rowHeight-43),ArenaDescription.Format(ArenaDescription.Brief(ability)),small,white);
+                y+=rowHeight;
+            }
+            if(ids.Length==0)Text(new Rect(0,0,rowWidth,27),"—",micro,muted);
+            GUI.EndScrollView();
+        }
         void Inspection()
         {
-            var d = inspectionDefinition; var f = inspectionFighter;
-            const float panelWidth = 430, innerWidth = 390, skillTextWidth = 352;
-            float hp = f == null ? d.hp : f.hp, maxHp = f == null ? d.hp : f.maxHp;
-            inspectionStates.Clear();
-            if (f != null) {
-                if (f.shield > 0) inspectionStates.Add(new KeyValuePair<string,string>("shield", "护盾 " + Mathf.CeilToInt(f.shield)));
-                if (f.poisonTime > 0) inspectionStates.Add(new KeyValuePair<string,string>("poison", "中毒"));
-                if (f.burnTime > 0) inspectionStates.Add(new KeyValuePair<string,string>("fire", "灼烧"));
-                if (f.slowTime > 0) inspectionStates.Add(new KeyValuePair<string,string>("frost", "减速"));
-                if (f.stunTime > 0) inspectionStates.Add(new KeyValuePair<string,string>("stun", "眩晕"));
+            if(inspectionDefinition==null||inspectionSubject==pinnedInspectionId)return;
+            Rect r=TooltipRect(370,InspectionPanelHeight(inspectionFighter,inspectionDefinition,false));inspectionTooltip=ToScreenRect(r);
+            DrawInspectionPanel(r,inspectionDefinition,inspectionFighter,inspectionUnit,inspectionOwner,false);
+        }
+        void DrawPinnedInspection()
+        {
+            if(!PinnedInspectionAvailable)return;
+            bool before=GUI.enabled;drawingArmy=true;
+            DrawInspectionPanel(PinnedInspectionRect,pinnedDefinition,pinnedFighter,pinnedUnit,pinnedOwner,true);
+            GUI.enabled=before;drawingArmy=false;
+        }
+        void DrawInspectionPanel(Rect r,CreatureDefinition d,FighterState f,UnitState unit,PlayerState owner,bool pinned)
+        {
+            float inner=r.width-32,hp=f==null?d.hp:f.hp,maxHp=f==null?d.hp:f.maxHp;
+            Panel(r,new Color(.045f,.085f,.10f,.985f));Color accent=owner==null?mint:Team(owner.slot);
+            Fill(new Rect(r.x+5,r.y+8,3,r.height-16),accent);
+            ArenaIcons.Creature(new Rect(r.x+17,r.y+15,49,49),d.model??d.id,MobColor(d));
+            Text(new Rect(r.x+77,r.y+13,r.width-127,32),d.name,label,white);
+            Text(new Rect(r.x+77,r.y+45,r.width-100,24),owner==null?d.role:Trim(owner.name,8)+" · "+d.role,micro,accent);
+            if(pinned&&IconButton(new Rect(r.xMax-43,r.y+12,29,29),"close","",new Color(.12f,.22f,.23f))){ClosePinnedInspection();return;}
+            Rect bar=new Rect(r.x+17,r.y+82,inner,16);Fill(bar,new Color(.015f,.025f,.03f));Fill(new Rect(bar.x+2,bar.y+2,(bar.width-4)*Mathf.Clamp01(hp/Mathf.Max(1,maxHp)),12),f!=null&&f.dead?muted:new Color(.3f,.75f,.46f));
+            Text(new Rect(bar.x,bar.y-5,bar.width,26),"<b>"+Mathf.CeilToInt(hp)+" / "+Mathf.CeilToInt(maxHp)+"</b>",centered,white);
+            Stat(new Rect(r.x+17,r.y+114,160,26),"sword",ArenaDescription.Format((f==null?d.attack:f.attack).ToString("0.#")));
+            Stat(new Rect(r.x+194,r.y+114,160,26),"speed",ArenaDescription.Format((f==null?d.attackSpeed:f.attackSpeed).ToString("0.##")+"/秒"));
+            Stat(new Rect(r.x+17,r.y+150,160,26),"range",ArenaDescription.Format((f==null?d.range:f.range).ToString("0.#")));
+            Stat(new Rect(r.x+194,r.y+150,160,26),"shield",ArenaDescription.Format(((f==null?0:f.armor)*100).ToString("0.#")+"%"));
+            float sx=r.x+17;
+            string[] icons={"shield","poison","fire","frost","stun"};
+            bool[] states={f!=null&&f.shield>0,f!=null&&f.poisonTime>0,f!=null&&f.burnTime>0,f!=null&&f.slowTime>0,f!=null&&f.stunTime>0};
+            for(int i=0;i<states.Length;i++)if(states[i]){ArenaIcons.Draw(new Rect(sx,r.y+185,22,22),icons[i]);sx+=31;}
+            string[] ids=InspectionSkillIds(d,f);float skillTop=r.y+218;
+            Fill(new Rect(r.x+17,skillTop-8,inner,1),new Color(.24f,.39f,.38f));
+            if(pinned)DrawPinnedSkillEffects(r,d,f);
+            else for(int i=0;i<ids.Length;i++){
+                var a=CreatureAbilities.Get(ids[i]);Rect chip=new Rect(r.x+17+(i%2)*(inner/2),skillTop+(i/2)*34,inner/2-4,29);
+                RoundFill(chip,new Color(.08f,.16f,.17f),5);ArenaIcons.Draw(new Rect(chip.x+5,chip.y+4,20,20),AbilityIcon(a));
+                Text(new Rect(chip.x+33,chip.y+3,chip.width-36,25),a.name,micro,mint);
             }
-            float stateWidth = 0, stateHeight = inspectionStates.Count == 0 ? 0 : 30;
-            foreach (var status in inspectionStates) {
-                float w = small.CalcSize(new GUIContent(ArenaDescription.Format(status.Value))).x + 34;
-                if (stateWidth + w > innerWidth) { stateHeight += 30; stateWidth = 0; }
-                stateWidth += w + 6;
+            if(!pinned&&ids.Length==0)Text(new Rect(r.x+17,skillTop,inner,27),"—",micro,muted);
+            if(!pinned)return;
+            bool preparation=app.State.phase=="prep"||app.State.phase=="recruit"||app.State.phase=="tactics";
+            if(preparation&&owner!=null&&owner.id==app.PlayerId&&unit!=null){
+                int refund=ArenaGame.DismissRefund(unit);bool enabled=GUI.enabled;
+                GUI.enabled=enabled&&app.Connected&&!owner.ready&&owner.units.Count>1&&dismissalPendingId==null;
+                if(IconButton(new Rect(r.x+17,r.yMax-48,inner,34),"coin","遣散  +"+refund,new Color(.29f,.23f,.14f))){dismissalPendingId=unit.id;dismissalPendingUntil=Time.unscaledTime+2;app.Send(new GameCommand{type="dismiss",unitId=unit.id});ClosePinnedInspection();}
+                GUI.enabled=enabled;
+            }else{
+                Text(new Rect(r.x+18,r.yMax-45,inner,29),f!=null&&f.dead?"已阵亡":CategoryName(d.category)+" · "+TagNames(d.tags),micro,muted);
             }
-            float detailY = 202 + stateHeight, skillHeight = 0;
-            foreach (var skill in inspectionSkills) {
-                skill.height = small.CalcHeight(new GUIContent(skill.rich), skillTextWidth);
-                skillHeight += 34 + skill.height + 10;
-            }
-            bool expanded = InspectionExpanded;
-            inspectionReveal.Step(expanded ? 1 : 0, 22, .76f);
-            float reveal = Mathf.Clamp01(inspectionReveal.value);
-            float baseHeight = detailY + 43;
-            // Current catalog + all applicable purchased skills fit. Keep the panel within short windows too.
-            float extra = Mathf.Max(0, skillHeight + 16 - 43);
-            float panelHeight = Mathf.Min(height - 36, baseHeight + extra * reveal);
-            Rect r = TooltipRect(panelWidth, panelHeight);
-            inspectionTooltip = ToScreenRect(r);
-            Panel(r, new Color(.07f,.11f,.12f,.99f));
-            ArenaIcons.Creature(new Rect(r.x+17,r.y+14,58,58),d.model??d.id,MobColor(d));
-            bool neutral=f!=null&&f.neutral;
-            bool resource=neutral&&app.State.roundEvent!=null&&app.State.roundEvent.kind=="gold";
-            Text(new Rect(r.x+89,r.y+13,321,36),resource?"中央金矿":(neutral?"中立 · ":f!=null&&f.scale<.9f?"小":"")+d.name,heading,neutral?gold:white);
-            Text(new Rect(r.x+89,r.y+52,321,26),neutral?(app.State.roundEvent==null?"中立生物":"击破奖励 "+app.State.roundEvent.reward+" 金币"):(inspectionOwner==null?"":Trim(inspectionOwner.name,8)+" · ")+d.role,small,neutral?gold:inspectionOwner==null?muted:Team(inspectionOwner.slot));
-            Fill(new Rect(r.x+20,r.y+92,innerWidth,18),new Color(.025f,.045f,.045f));
-            Fill(new Rect(r.x+22,r.y+94,(innerWidth-4)*Mathf.Clamp01(hp/Mathf.Max(1,maxHp)),14),new Color(.29f,.75f,.45f));
-            Text(new Rect(r.x+20,r.y+88,innerWidth,25),"<b>"+Mathf.CeilToInt(hp)+" / "+Mathf.CeilToInt(maxHp)+"</b>",centered,white);
-            Stat(new Rect(r.x+20,r.y+127,183,29),"sword",ArenaDescription.Format((f==null?d.attack:f.attack).ToString("0.#")));
-            Stat(new Rect(r.x+225,r.y+127,183,29),"speed",ArenaDescription.Format((f==null?d.attackSpeed:f.attackSpeed).ToString("0.##")+" 次/秒"));
-            Stat(new Rect(r.x+20,r.y+164,183,29),"range",ArenaDescription.Format((f==null?d.range:f.range).ToString("0.#")));
-            Stat(new Rect(r.x+225,r.y+164,183,29),"shield",ArenaDescription.Format(((f==null?0:f.armor)*100).ToString("0.#")+"% 护甲"));
-            float sx = 0, sy = 0;
-            foreach (var status in inspectionStates) {
-                string text = ArenaDescription.Format(status.Value);
-                float w = small.CalcSize(new GUIContent(text)).x + 34;
-                if (sx + w > innerWidth) { sy += 30; sx = 0; }
-                ArenaIcons.Draw(new Rect(r.x+20+sx,r.y+202+sy,22,22),status.Key);
-                Text(new Rect(r.x+47+sx,r.y+201+sy,w-26,27),text,small,gold); sx += w+6;
-            }
-            Fill(new Rect(r.x+20,r.y+detailY+3,innerWidth,1),new Color(.34f,.42f,.38f,.55f));
-            if(resource) {
-                Text(new Rect(r.x+20,r.y+detailY+12,innerWidth,25),"额外奖励 · 不计普通击杀收入",micro,gold);
-                return;
-            }
-            if (!expanded) {
-                Text(new Rect(r.x+20,r.y+detailY+12,innerWidth-72,25),"停留查看技能",micro,muted);
-                float progress = Mathf.Clamp01((Time.unscaledTime-inspectionStarted)/InspectionDelay);
-                Rect track = new Rect(r.xMax-82,r.y+detailY+22,60,3);
-                Fill(track,new Color(.15f,.24f,.22f)); Fill(new Rect(track.x,track.y,track.width*progress,3),mint);
-                return;
-            }
-            GUI.BeginClip(new Rect(r.x+20,r.y+detailY+10,innerWidth,Mathf.Max(0,r.height-detailY-20)));
-            float y = 0;
-            foreach (var skill in inspectionSkills) {
-                ArenaIcons.Draw(new Rect(0,y+2,26,26),skill.icon);
-                Text(new Rect(38,y,skillTextWidth,28),"<b>"+skill.name+"</b>",label,mint);
-                Text(new Rect(38,y+31,skillTextWidth,skill.height+3),skill.rich,small,white);
-                y += 34 + skill.height + 10;
-            }
-            if(inspectionSkills.Count==0) Text(new Rect(0,0,innerWidth,28),"暂无技能",small,muted);
-            GUI.EndClip();
         }
     }
 }

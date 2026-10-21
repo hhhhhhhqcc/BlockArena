@@ -1,0 +1,94 @@
+{
+  "generator": "Tools/Generate-InterfaceAudio.py",
+  "provenance": "Original procedural synthesis; Python standard library; no third-party samples.",
+  "assets": [
+    {
+      "file": "ui_hover.wav",
+      "duration_seconds": 0.06,
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_bits": 16,
+      "peak": 0.0877991,
+      "rms": 0.0253936,
+      "clipped_samples": 0,
+      "sha256": "62e5c8e1d4ed7920a6795ea478fef840d0e94afad68371666e1e02e4a5c2d114"
+    },
+    {
+      "file": "ui_toggle.wav",
+      "duration_seconds": 0.18,
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_bits": 16,
+      "peak": 0.1391907,
+      "rms": 0.0400121,
+      "clipped_samples": 0,
+      "sha256": "5ad5a0b5e9a286d744873b4b79732fe0e58857822313e921dbcc94541675d10a"
+    },
+    {
+      "file": "route_node.wav",
+      "duration_seconds": 0.22,
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_bits": 16,
+      "peak": 0.1979065,
+      "rms": 0.045476,
+      "clipped_samples": 0,
+      "sha256": "bc5b0ded1591d34ab0902773f026862cc0df16a5b7e3b7260142af9349bc7e62"
+    },
+    {
+      "file": "skill_select.wav",
+      "duration_seconds": 0.48,
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_bits": 16,
+      "peak": 0.1682739,
+      "rms": 0.0441047,
+      "clipped_samples": 0,
+      "sha256": "67980f1f81eb364f6e96eaf555087016375244e53456c10695bf20c5b59213ef"
+    },
+    {
+      "file": "draw_tick.wav",
+      "duration_seconds": 0.11,
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_bits": 16,
+      "peak": 0.2044678,
+      "rms": 0.0450914,
+      "clipped_samples": 0,
+      "sha256": "b011cf56d398fce33aae26dfa5b67e1267848fb77a26d3cc403a711848a54cea"
+    },
+    {
+      "file": "map_draw.wav",
+      "duration_seconds": 0.62,
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_bits": 16,
+      "peak": 0.1577759,
+      "rms": 0.0650308,
+      "clipped_samples": 0,
+      "sha256": "84bcbb584c107cefecd0d231e5ffe8cf015713a8479d17916aa79d08fbc4eee5"
+    },
+    {
+      "file": "weather_draw.wav",
+      "duration_seconds": 0.72,
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_bits": 16,
+      "peak": 0.1755066,
+      "rms": 0.0544069,
+      "clipped_samples": 0,
+      "sha256": "50c8318b815dbb96b92054ffeeae434cc5a1e6b11a8feb441659243e86f117a6"
+    },
+    {
+      "file": "tactics_start.wav",
+      "duration_seconds": 0.65,
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_bits": 16,
+      "peak": 0.1782227,
+      "rms": 0.0452631,
+      "clipped_samples": 0,
+      "sha256": "ffcead087c00bd00476c724833e13a5bc82c515bd51b08ed73a23a97efaeeb87"
+    }
+  ]
+}

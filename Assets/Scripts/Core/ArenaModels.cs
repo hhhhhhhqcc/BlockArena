@@ -17,6 +17,9 @@ namespace BlockArena.Core
         public int index = -1;
         public float x, y, dx, dy;
         public bool bots = true;
+        public string skillId, targetId, mapId, weather;
+        public string[] unitIds;
+        public TacticNode[] nodes;
     }
 
     [Serializable]
@@ -24,6 +27,10 @@ namespace BlockArena.Core
     {
         public string hostId, phase = "lobby", winnerId, message, leaderId;
         public ArenaEventState roundEvent;
+        public BattlefieldState battlefield;
+        public string preferredMap, preferredWeather;
+        public string revealStage;
+        public float revealStageAge;
         public int round;
         public float timeLeft;
         public List<PlayerState> players = new List<PlayerState>();
@@ -48,6 +55,12 @@ namespace BlockArena.Core
         public List<ShopOffer> market = new List<ShopOffer>();
         public List<string> upgrades = new List<string>();
         public Point2 steve;
+        public Point2 steveDestination;
+        public bool steveNavigating;
+        public string commanderSkill="drums";
+        public int commanderUses=2;
+        public float commanderCooldown;
+        public List<TacticPlanState> tactics=new List<TacticPlanState>();
         internal float moveX, moveY, moveUntil, botAt;
     }
 
@@ -71,6 +84,16 @@ namespace BlockArena.Core
         public float armor, shield, poisonTime, burnTime, slowTime, stunTime;
         public bool summoned, neutral;
         public bool dead;
+        public bool hidden;
+        public float resistanceTime,rootTime;
+        internal float baseSpeed,baseAttackSpeed,baseRange,baseAttack,baseArmor;
+        internal float environmentDamage=1,healingMultiplier=1,statusDurationMultiplier=1,commandHaste,commandGuard;
+        internal float revealUntil,trapUntil;
+        internal bool isDecoy;
+        internal int tacticIndex;
+        internal float tacticWait;
+        internal float navigationUntil;
+        internal Point2 navigationGoal,navigationWaypoint;
         internal float attackCooldown, radius, think, side;
         internal bool mini;
         internal string targetId;
@@ -86,6 +109,7 @@ namespace BlockArena.Core
     public sealed class EffectState
     {
         public string id, type;
+        public string sourceId, targetId, kind;
         public float x, y, age, targetX, targetY, value;
         public int slot;
     }

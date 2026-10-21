@@ -57,12 +57,15 @@ namespace BlockArena.Core
 
         void Dismiss(PlayerState player, string unitId)
         {
-            if (State.phase != "recruit" && State.phase != "prep") Fail("只能在招募或准备阶段遣散");
+            if (State.phase != "recruit" && State.phase != "prep" && State.phase!="tactics") Fail("只能在准备或战术阶段遣散");
+            if(State.phase=="tactics"&&player.ready)Fail("请先取消准备");
             UnitState unit = player.units.Find(candidate => candidate.id == unitId);
             if (unit == null) Fail("只能遣散自己拥有的生物");
             if (player.units.Count <= 1) Fail("至少保留一只生物");
             int refund = DismissRefund(unit);
             player.units.Remove(unit);
+            foreach(var plan in player.tactics)plan.unitIds=plan.unitIds.Where(id=>id!=unitId).ToArray();
+            player.tactics.RemoveAll(plan=>plan.unitIds.Length==0);
             player.gold += refund;
             player.ready = false;
             // Pending recruitment stays pending: a dismissal can fund its purchase.
@@ -92,12 +95,7 @@ namespace BlockArena.Core
             if (killer == null || killer.eliminated || !participants.Contains(killer.id)) return;
             if (defeated.neutral)
             {
-                ArenaEventState roundEvent = State.roundEvent;
-                if (roundEvent == null || !roundEvent.active || roundEvent.fighterId != defeated.id ||
-                    !string.IsNullOrEmpty(roundEvent.claimedBy)) return;
-                roundEvent.claimedBy = killer.id; roundEvent.active = false;
-                killer.eventIncome += roundEvent.reward; killer.gold += roundEvent.reward;
-                Effect("event_claim", defeated.x, defeated.y, killer.slot, roundEvent.reward);
+                // Resources are fixed map objectives; retired central event actors grant no income.
                 return;
             }
             if (defeated.summoned || !participants.Contains(defeated.ownerId)) return;

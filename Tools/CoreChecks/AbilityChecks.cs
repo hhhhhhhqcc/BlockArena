@@ -92,6 +92,8 @@ internal static partial class Program
                 Assert(ReferenceEquals(caster, kind == "cave_spider" ? target.poisonSource : target.burnSource));
                 int gold = owner.gold; target.hp = .1f; Advance(game, .65f);
                 Assert(target.dead, kind + " stopped dealing damage after caster death");
+                EffectState dotHit = game.State.effects.Last(e => e.type == "hit" && e.targetId == target.id);
+                Equal(caster.id, dotHit.sourceId); Equal(caster.kind, dotHit.kind);
                 Equal("a", target.lastAttackerId); Equal(1, owner.roundKills); Equal(1, owner.totalKills);
                 Equal("battle", game.State.phase); Equal(gold + 1, owner.gold); Equal(gold + 1, game.SnapshotFor(owner.id).players[0].gold);
             }

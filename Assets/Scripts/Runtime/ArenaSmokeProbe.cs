@@ -48,7 +48,7 @@ namespace BlockArena.Runtime
             var app=ArenaApp.Instance;
             app.VerificationInput=true;
             yield return new WaitForSecondsRealtime(1.5f);
-            if(app.Sound==null||app.Sound.ClipsLoaded!=27||app.Sound.MusicTrackCount!=3||!app.Sound.MusicIsPlaying)
+            if(app.Sound==null||app.Sound.ClipsLoaded!=40||app.Sound.MusicTrackCount!=3||!app.Sound.MusicIsPlaying)
             {Fail("original music or sound assets not loaded");yield break;}
             string menuTrack=app.Sound.CurrentMusic;
             int soundBaseline=app.Sound.SoundCount;
@@ -63,8 +63,12 @@ namespace BlockArena.Runtime
             Destroy(cursorPreview);
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"01-menu.png"));
             yield return new WaitForSecondsRealtime(.5f);
-            app.Host(true);
+            app.Host();
             float deadline=Time.realtimeSinceStartup+18;
+            while((!app.Connected||app.State==null||app.State.phase!="lobby")&&Time.realtimeSinceStartup<deadline)yield return null;
+            if(!app.Connected||app.State==null||app.State.phase!="lobby"){Fail("lobby handshake failed: "+app.Status);yield break;}
+            app.Send(new GameCommand{type="world_options",mapId="courtyards",weather="clear"});
+            app.Send(new GameCommand{type="start",bots=true});
             while((app.State==null||app.State.phase!="recruit")&&Time.realtimeSinceStartup<deadline)yield return null;
             if(app.State==null||app.State.phase!="recruit"){Fail("recruit handshake failed: "+app.Status);yield break;}
             yield return new WaitForSecondsRealtime(1.2f);
@@ -95,6 +99,12 @@ namespace BlockArena.Runtime
                 {Fail("recruit skill effects do not fit the actual card layout: "+kind);yield break;}
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"02-recruit.png"));
             yield return new WaitForSecondsRealtime(.5f);
+            app.Hud.SetRecruitVisible(false);
+            yield return new WaitForEndOfFrame();
+            if(app.Hud.RecruitVisible||!app.CanArrangeCreatures){Fail("hiding recruitment did not restore formation interactions");yield break;}
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"02b-recruit-hidden.png"));
+            app.Hud.SetRecruitVisible(true);
+            if(!app.Hud.RecruitVisible){Fail("pending recruitment could not be reopened");yield break;}
             int choice=-1,price=999;
             for(int i=0;i<app.Me.shop.Length;i++)if(CreatureCatalog.Get(app.Me.shop[i]).price<price){choice=i;price=CreatureCatalog.Get(app.Me.shop[i]).price;}
             // Save the initial 12 coins to exercise the skill-only shop in every random room.
@@ -160,42 +170,25 @@ namespace BlockArena.Runtime
             {Fail("collapsed commander roster still blocks its old empty arena space");yield break;}
 
             app.InspectPointer(app.VerificationPointer.Value);
-            float hoverStarted=Time.unscaledTime;
-            bool baseCaptured=false;
-            while(Time.unscaledTime-hoverStarted<1.25f)
-            {
-                app.VerificationPointer=InspectionPoint(camera,placed);
-                app.InspectPointer(app.VerificationPointer.Value);
-                if(app.World.HoveredCreature==null||app.World.HoveredCreature.UnitId!=placed.UnitId)
-                {Fail("preparation delayed hover lost the intended creature");yield break;}
-                float hoveredFor=Time.unscaledTime-hoverStarted;
-                if(hoveredFor<.75f&&app.Hud.InspectionExpanded)
-                {Fail("creature skill details appeared before one second of uninterrupted hover");yield break;}
-                if(!baseCaptured&&hoveredFor>.3f)
-                {
-                    if(app.Hud.InspectionSkillCount!=0||!TooltipFits(app.Hud.InspectionTooltipScreenRect))
-                    {Fail("instant creature tooltip contains delayed skills or falls outside the display");yield break;}
-                    ScreenCapture.CaptureScreenshot(Path.Combine(folder,"19-hover-base.png"));baseCaptured=true;
-                }
-                yield return null;
-            }
-            if(!app.Hud.InspectionExpanded||app.Hud.InspectionSkillCount<1||!TooltipFits(app.Hud.InspectionTooltipScreenRect)||!HasSkillExplanation(app.Hud.InspectionSkillText,CreatureCatalog.Get(placed.Kind)))
-            {Fail("one-second creature hover did not reveal readable concise skill effects");yield break;}
-            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"20-hover-skills.png"));
-            yield return null;
-            // A second instance of the same species must not inherit the first instance's timer.
+            app.VerificationPointer=InspectionPoint(camera,placed);
+            app.InspectPointer(app.VerificationPointer.Value);
+            yield return new WaitForEndOfFrame();
+            if(app.World.HoveredCreature==null||app.World.HoveredCreature.UnitId!=placed.UnitId||
+                !app.Hud.InspectionExpanded||!TooltipFits(app.Hud.InspectionTooltipScreenRect)||
+                !HasOnlySkillNames(app.Hud.InspectionSkillText,CreatureCatalog.Get(placed.Kind)))
+            {Fail("instant creature hover did not show stats and skill names only");yield break;}
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"19-hover-base.png"));
+            if(!app.PinCreatureAt(app.VerificationPointer.Value)){Fail("click could not pin creature inspection");yield break;}
+            app.VerificationPointer=new Vector2(-200,-200);app.InspectPointer(app.VerificationPointer.Value);
+            yield return new WaitForEndOfFrame();
+            if(app.Hud.PinnedInspectionId!=unit.id){Fail("fixed creature inspection did not survive pointer leave");yield break;}
+            ScreenCapture.CaptureScreenshot(Path.Combine(folder,"20-pinned-inspection.png"));
+            app.Hud.ClosePinnedInspection();
+            // Switching identities immediately refreshes names without carrying delayed or stale details.
             var sameSpecies=new UnitState{id="verification-other-"+unit.id,kind=unit.kind,x=unit.x,y=unit.y};
             app.Hud.SetInspection(CreatureCatalog.Get(unit.kind),null,sameSpecies,app.Me,app.VerificationPointer.Value);
-            if(app.Hud.InspectionExpanded||app.Hud.InspectionSkillCount!=0)
-            {Fail("switching creature identity within one species preserved expanded skill details");yield break;}
-            app.InspectPointer(app.VerificationPointer.Value);
-            if(app.Hud.InspectionExpanded){Fail("returning to a previous creature inherited its old hover timer");yield break;}
-            float firstUnitUntil=Time.unscaledTime+.45f;
-            while(Time.unscaledTime<firstUnitUntil)
-            {
-                app.VerificationPointer=InspectionPoint(camera,placed);app.InspectPointer(app.VerificationPointer.Value);
-                yield return null;
-            }
+            if(!HasOnlySkillNames(app.Hud.InspectionSkillText,CreatureCatalog.Get(unit.kind)))
+            {Fail("switching creature identity did not refresh the skill names");yield break;}
             VoxelCreature otherPlaced=null;
             foreach(var candidate in app.World.GetComponentsInChildren<VoxelCreature>())
                 if(candidate.Kind!="steve"&&candidate.Slot==app.Me.slot&&candidate.UnitId!=placed.UnitId){otherPlaced=candidate;break;}
@@ -204,15 +197,15 @@ namespace BlockArena.Runtime
             while(Time.unscaledTime<switchedUntil)
             {
                 app.VerificationPointer=InspectionPoint(camera,otherPlaced);app.InspectPointer(app.VerificationPointer.Value);
-                if(app.World.HoveredCreature==null||app.World.HoveredCreature.UnitId!=otherPlaced.UnitId||app.Hud.InspectionExpanded)
-                {Fail("switching real creatures carried the previous creature's hover duration");yield break;}
+                if(app.World.HoveredCreature==null||app.World.HoveredCreature.UnitId!=otherPlaced.UnitId)
+                {Fail("switching real creatures retained a stale hovered creature");yield break;}
                 yield return null;
             }
             app.VerificationPointer=new Vector2(-200,-200);app.InspectPointer(app.VerificationPointer.Value);
             if(app.Hud.InspectionExpanded||app.Hud.InspectionSkillCount!=0)
-            {Fail("leaving a creature did not immediately reset delayed skill details");yield break;}
+            {Fail("leaving a creature did not immediately clear transient inspection");yield break;}
             app.InspectPointer(InspectionPoint(camera,placed));
-            if(app.Hud.InspectionExpanded){Fail("re-entering after pointer leave restored an expired hover timer");yield break;}
+            if(!app.Hud.InspectionExpanded){Fail("re-entering creature hover was not immediate");yield break;}
             app.InspectPointer(app.VerificationPointer.Value);
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"03-preparation.png"));
             yield return new WaitForSecondsRealtime(.5f);
@@ -296,8 +289,12 @@ namespace BlockArena.Runtime
             app.ShowBestiary=false;
             if(!app.Me.ready)app.Send(new GameCommand{type="ready"});
             Debug.Log("ARENA_SMOKE_READY_SENT "+Describe(app));
-            deadline=Time.realtimeSinceStartup+15;
-            while(app.State.phase!="battle"&&Time.realtimeSinceStartup<deadline)yield return null;
+            deadline=Time.realtimeSinceStartup+60;
+            bool tacticsReady=false;
+            while(app.State.phase!="battle"&&Time.realtimeSinceStartup<deadline){
+                if(app.State.phase=="tactics"&&!tacticsReady){tacticsReady=true;app.Send(new GameCommand{type="tactics_ready"});}
+                yield return null;
+            }
             if(app.State.phase!="battle"){ScreenCapture.CaptureScreenshot(Path.Combine(folder,"failure.png"));Fail("battle transition failed: "+Describe(app));yield break;}
             int roundStartingGold=app.Me.gold-Mathf.Min(5,app.Me.roundKills)-app.Me.bountyIncome-app.Me.eventIncome;
             foreach(var player in app.State.players)combatBalances[player.id]=player.gold-Mathf.Min(5,player.roundKills)-player.bountyIncome-player.eventIncome;
@@ -397,7 +394,7 @@ namespace BlockArena.Runtime
                 ScreenCapture.CaptureScreenshot(Path.Combine(folder,"09-creatures-"+(page+1)+".png"));
                 yield return new WaitForSecondsRealtime(.4f);
             }
-            Debug.Log("ARENA_SMOKE_OK native host / recruit cards show all concise quantified innate effects / all 89 species including three-skill bosses fit recruit cards / paid recruit or skip / draggable skill-only market / captured input / screen clamp / saved window position / skill purchase and ownership / full skill species list and current army matches / friendly skill highlight clears on leave / real drag / 700ms stale snapshot / placement acknowledgement / instant creature stats and one-second concise skills / per-instance hover reset on switch and leave / commander roster edge reveal, panel hold, collapsed-space input pass-through and battle pinning / hidden bars / enemy hover / zoom / real-time kill income / settlement without duplicate gold / rising crystal pillar / sequential ritual launch and impact without replay / original music and 27 audio clips / audio controls / next recruitment / 89 creature models / screenshots");
+            Debug.Log("ARENA_SMOKE_OK native host / recruit cards show all concise quantified innate effects / all 89 species including three-skill bosses fit recruit cards / paid recruit or skip / draggable skill-only market / captured input / screen clamp / saved window position / skill purchase and ownership / full skill species list and current army matches / friendly skill highlight clears on leave / real drag / 700ms stale snapshot / placement acknowledgement / instant creature stats and skill names / click-to-pin inspection / hide and restore recruitment / fresh hover on switch and leave / commander roster edge reveal, panel hold, collapsed-space input pass-through and battle pinning / hidden bars / enemy hover / zoom / real-time kill income / settlement without duplicate gold / rising crystal pillar / sequential ritual launch and impact without replay / original music and 40 audio clips / audio controls / next recruitment / 89 creature models / screenshots");
             if(Array.IndexOf(args,"-smoke-exit")>=0)Application.Quit(0);
             else {app.VerificationInput=false;app.enabled=true;app.World.Clear();}
             Destroy(gameObject);
@@ -406,12 +403,10 @@ namespace BlockArena.Runtime
         {return camera.WorldToScreenPoint(creature.transform.position+Vector3.up*(creature.Height*creature.Size*.5f));}
         static bool TooltipFits(Rect rect)
         {return rect.width>0&&rect.height>0&&rect.xMin>=-.5f&&rect.yMin>=-.5f&&rect.xMax<=Screen.width+.5f&&rect.yMax<=Screen.height+.5f;}
-        static bool HasSkillExplanation(string text,CreatureDefinition creature)
+        static bool HasOnlySkillNames(string text,CreatureDefinition creature)
         {
-            if(string.IsNullOrEmpty(text))return false;
-            bool quantified=false;foreach(char c in text)if(char.IsDigit(c)){quantified=true;break;}
-            string effects=text;foreach(string id in creature.skills)effects=effects.Replace(CreatureAbilities.Get(id).name,"");
-            return quantified&&effects.Trim().Length>=6;
+            var names=new List<string>();foreach(string id in creature.skills)names.Add(CreatureAbilities.Get(id).name);
+            return text==string.Join("、",names.ToArray());
         }
         static int VisibleBars(ArenaApp app){int count=0;foreach(var v in app.World.GetComponentsInChildren<VoxelCreature>())if(v.HealthBarVisible)count++;return count;}
         static string Describe(ArenaApp app){string value="connected="+app.Connected+" phase="+app.State.phase+" time="+app.State.timeLeft+" status="+app.Status;foreach(var p in app.State.players)value+=" | "+p.name+" ready="+p.ready+" pending="+p.recruitPending+" bot="+p.bot;return value;}

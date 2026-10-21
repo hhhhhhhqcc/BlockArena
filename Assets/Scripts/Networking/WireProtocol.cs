@@ -21,7 +21,7 @@ namespace BlockArena.Networking
 
     public static class WireProtocol
     {
-        public const int Version = 4;
+        public const int Version = 7;
         public const int DefaultPort = 7777;
         public const int MaxCommandBytes = 64 * 1024;
         public const int MaxSnapshotBytes = 4 * 1024 * 1024;

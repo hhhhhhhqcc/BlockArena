@@ -40,6 +40,9 @@ namespace BlockArena.Runtime
         public float SfxVolume { get { return sfxVolume; } }
         public bool Muted { get { return muted || (musicVolume <= 0 && sfxVolume <= 0); } }
         public int SoundCount { get; private set; }
+        internal int UiClickCount { get; private set; }
+        internal float LastUiClickLevel { get; private set; }
+        internal string LastPlayedClip { get; private set; }
         public int ClipsLoaded { get { return clips.Count; } }
         public int MusicTrackCount { get; private set; }
         public string CurrentMusic { get { return currentMusic; } }
@@ -86,7 +89,7 @@ namespace BlockArena.Runtime
             }
             for (int i = 0; i < voices.Length; i++) voices[i] = MakeSource("Effect " + i);
             LoadMusic("music_menu"); LoadMusic("music_prep"); LoadMusic("music_battle");
-            Register("click", .58f, .045f, 0, 1, true);
+            Register("click", .48f, .035f, 0, 1, true);
             Register("purchase", .70f, .09f, 0, 2, true);
             Register("coin", .53f, .12f, 0, 1, false);
             Register("pickup", .58f, .075f, .12f, 1, false);
@@ -110,12 +113,34 @@ namespace BlockArena.Runtime
             Register("countdown_urgent", .74f, .18f, 0, 3, true);
             Register("execution_charge", .76f, .2f, .08f, 4, true);
             Register("execution_hit", .88f, .13f, .08f, 5, true);
+            Register("map_rise_stone", .67f, 1f, .04f, 3, true);
+            Register("map_rise_bog", .60f, 1f, .04f, 3, true);
+            Register("map_rise_frost", .60f, 1f, .04f, 3, true);
+            Register("map_lock", .60f, .5f, .04f, 3, true);
+            Register("weather_reveal", .56f, .5f, 0, 3, true);
+            Register("ui_hover", .24f, .09f, 0, 0, true);
+            Register("ui_toggle", .48f, .08f, 0, 1, true);
+            Register("route_node", .45f, .075f, 0, 1, true);
+            Register("skill_select", .57f, .15f, 0, 2, true);
+            Register("draw_tick", .48f, .065f, 0, 2, true);
+            Register("map_draw", .58f, .6f, 0, 3, true);
+            Register("weather_draw", .53f, .6f, 0, 3, true);
+            Register("tactics_start", .62f, .7f, 0, 3, true);
             Alias("ui_click", "click"); Alias("buy", "purchase"); Alias("gold", "coin");
+            Alias("combat_strike", "attack");
             Alias("drag", "pickup"); Alias("drop", "place"); Alias("start", "battle_start");
             Alias("win", "victory"); Alias("lose", "defeat");
-            Alias("open", "pickup"); Alias("close", "place"); Alias("ready", "click");
+            Alias("ui_toggle", "click");
+            Alias("open", "click"); Alias("close", "click"); Alias("ready", "click");
+            Alias("select", "pickup"); Alias("route_clear", "place");
             Alias("refresh", "coin"); Alias("choose", "purchase"); Alias("skip", "click");
-            Alias("ui_open", "pickup"); Alias("ui_close", "place"); Alias("battle", "battle_start");
+            Alias("ui_open", "click"); Alias("ui_close", "click"); Alias("battle", "battle_start");
+            Alias("combat_cleanse", "combat_heal"); Alias("combat_lightning", "combat_explode");
+            Alias("combat_eruption", "combat_explode"); Alias("combat_cover_break", "combat_death");
+            Alias("combat_command_drums", "battle_start"); Alias("combat_command_ward", "combat_heal");
+            Alias("combat_command_focus", "ritual_charge"); Alias("combat_command_cleanse", "combat_heal");
+            Alias("combat_command_smoke", "pickup"); Alias("combat_command_trap", "combat_hit");
+            Alias("combat_command_decoy", "ritual_rise"); Alias("combat_command_rift", "ritual_launch");
             musicEpoch = AudioSettings.dspTime + .05;
             CheckListener();
             SetPhase("menu");
@@ -171,7 +196,7 @@ namespace BlockArena.Runtime
         public void SetPhase(string phase)
         {
             string track = phase == "battle" ? "music_battle" :
-                phase == "prep" || phase == "recruit" || phase == "results" ? "music_prep" : "music_menu";
+                phase == "prep" || phase == "recruit" || phase == "results" || phase == "reveal" || phase == "tactics" ? "music_prep" : "music_menu";
             if (currentMusic == track) return;
             AudioClip clip;
             if (!clips.TryGetValue(track, out clip)) return;
@@ -205,6 +230,8 @@ namespace BlockArena.Runtime
             ApplyVolumes();
         }
 
+        public void PlayUiClick() { Play("ui_click", Vector3.zero, 1f); }
+
         public void Play(string cue, Vector3 world, float intensity = 1f)
         {
             if (muted || sfxVolume <= 0 || string.IsNullOrEmpty(cue)) return;
@@ -221,6 +248,8 @@ namespace BlockArena.Runtime
             if (voice < 0) return;
             float level = Mathf.Clamp01(float.IsNaN(intensity) ? 1 : intensity);
             if (level <= 0) return;
+            // Mouse, keyboard and legacy toggle aliases share the same button loudness.
+            if (definition.clip == "click") level = 1f;
             AudioSource source = voices[voice];
             source.Stop();
             source.transform.position = world;
@@ -247,6 +276,8 @@ namespace BlockArena.Runtime
             voicePriority[voice] = definition.priority;
             nextCueTime[definition.clip] = now + definition.cooldown;
             SoundCount++;
+            LastPlayedClip = definition.clip;
+            if (definition.clip == "click") { UiClickCount++; LastUiClickLevel = voiceLevels[voice]; }
         }
 
         int FindVoice(int priority, float now)

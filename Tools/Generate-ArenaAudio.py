@@ -276,7 +276,7 @@ def texture(seconds, kind, seed):
 
 def effect(name):
     lengths = {
-        "click": .15, "purchase": .72, "coin": .48, "pickup": .30, "place": .27,
+        "click": .105, "purchase": .72, "coin": .48, "pickup": .30, "place": .27,
         "recruit": 1.12, "battle_start": 1.35, "attack": .22,
         "ritual_rise": 1.25, "ritual_charge": .86, "ritual_launch": .65,
         "commander_hit": .70, "victory": 2.8, "defeat": 2.6,
@@ -288,8 +288,19 @@ def effect(name):
     mix = Mix(lengths[name])
     seed = sum(map(ord, name))
     if name == "click":
-        mix.note(84, 0, .10, .85, "pluck")
-        mix.note(91, .025, .09, .22, "glass")
+        # One soft wood/glass tap for every button: no random pitch and no long ringing tail.
+        rng = random.Random(SEED + seed)
+        signal = array("f")
+        low_noise = 0.0
+        for frame in range(mix.frames):
+            t = frame / SAMPLE_RATE
+            low_noise += .18 * (rng.uniform(-1, 1) - low_noise)
+            edge = smoothstep(t / .002) * smoothstep((lengths[name] - t) / .018)
+            value = (.72 * math.sin(TAU * frequency(74) * t) * math.exp(-46 * t) +
+                     .16 * math.sin(TAU * frequency(86) * t) * math.exp(-78 * t) +
+                     .30 * low_noise * math.exp(-130 * t))
+            signal.append(value * edge)
+        mix.add(signal, 0, 1)
     elif name in ("countdown", "countdown_urgent"):
         mix.note(86 if name == "countdown" else 93, 0, .20, .65, "glass")
         if name == "countdown_urgent":

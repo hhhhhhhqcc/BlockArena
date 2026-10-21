@@ -95,6 +95,7 @@ namespace BlockArena.Networking
         {
             if (!IsRunning) return;
             double now = NetworkClock.Now;
+            PruneDisconnectedLobbySessions(now);
             AcceptedSocket next;
             while (accepted.TryDequeue(out next))
             {
@@ -133,6 +134,7 @@ namespace BlockArena.Networking
                     game.SetConnected(session.PlayerId, false); session.MarkedDisconnected = true;
                 }
             }
+            PruneDisconnectedLobbySessions(now);
             if (float.IsNaN(dt) || float.IsInfinity(dt) || dt < 0) dt = 0;
             dt = Math.Min(dt, .5f);
             simulationAccumulator += dt; broadcastAccumulator += dt;
@@ -182,6 +184,9 @@ namespace BlockArena.Networking
 
         private void Hello(Peer peer, WirePacket packet)
         {
+            // A restart can return to the lobby earlier in this same Pump batch.
+            // Expire vacant seats and their credentials before processing the next hello.
+            PruneDisconnectedLobbySessions(NetworkClock.Now);
             if (!string.IsNullOrEmpty(packet.token))
             {
                 Session resumed;
@@ -199,13 +204,27 @@ namespace BlockArena.Networking
             string id = "p_" + Guid.NewGuid().ToString("N"), name = CleanName(packet.name);
             try
             {
-                if (game == null) game = new ArenaGame(id, name);
+                if (game == null || game.State.players.Count==0) game = new ArenaGame(id, name);
                 else game.AddPlayer(id, name);
             }
             catch (InvalidOperationException ex) { Reject(peer, ex.Message); return; }
             var session = new Session { PlayerId = id, Token = NewToken(), Peer = peer };
             sessions.Add(session.Token, session); peer.Session = session;
             Welcome(peer);
+        }
+        private void PruneDisconnectedLobbySessions(double now)
+        {
+            if(game==null||game.State.phase!="lobby")return;
+            List<Session> expired=null;
+            foreach(Session session in sessions.Values){
+                if(session.Peer!=null||session.DisconnectedAt<0||now-session.DisconnectedAt<WireProtocol.DisconnectGraceSeconds)continue;
+                if(expired==null)expired=new List<Session>();expired.Add(session);
+            }
+            if(expired==null)return;
+            foreach(Session session in expired){
+                game.RemovePlayer(session.PlayerId);
+                sessions.Remove(session.Token);
+            }
         }
         private void Welcome(Peer peer)
         {

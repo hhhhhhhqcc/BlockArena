@@ -14,5 +14,8 @@
     <Compile Include="AbilityChecks.cs" />
     <Compile Include="RitualChecks.cs" />
     <Compile Include="AntiSnowballChecks.cs" />
+    <Compile Include="EffectChecks.cs" />
+    <Compile Include="WorldRulesChecks.cs" />
+    <Compile Include="TacticsChecks.cs" />
   </ItemGroup>
 </Project>

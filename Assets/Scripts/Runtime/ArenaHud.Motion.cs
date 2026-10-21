@@ -54,18 +54,13 @@ namespace BlockArena.Runtime
         public Action<string> SoundCue;
         public Func<string, bool> CommanderImpactPending;
         public float MusicVolume = .45f, SfxVolume = .7f;
-        public bool ShowAudio { get; set; }
+        public bool ShowCommanderRange { get; set; } = true;
+        public Action<bool> CommanderRangeChanged;
+        public bool ShowCreatureRange { get; set; } = true;
+        public Action<bool> CreatureRangeChanged;
         float rememberedMusic = .45f, rememberedSfx = .7f;
         bool audioPointerOwned, drawingAudio;
         int audioPointerFrame = -1, audioReleasedFrame = -10, audioSlider = -1;
-        Rect AudioToggleRect { get { return new Rect(width - 62, 18, 44, 42); } }
-        Rect AudioPanelRect { get { return new Rect(width - 304, 71, 286, 234); } }
-        Rect AudioMusicSliderRect { get { Rect r = AudioPanelRect; return new Rect(r.x + 19, r.y + 78, r.width - 38, 24); } }
-        Rect AudioSfxSliderRect { get { Rect r = AudioPanelRect; return new Rect(r.x + 19, r.y + 144, r.width - 38, 24); } }
-        internal Rect AudioScreenRect
-        {
-            get { Metrics(); Rect r = AudioPanelRect; return new Rect(r.x * scale, Screen.height - r.yMax * scale, r.width * scale, r.height * scale); }
-        }
 
         // Loading persisted values never emits a callback or a sound.
         public void SetAudioVolumes(float music, float sfx)
@@ -81,8 +76,8 @@ namespace BlockArena.Runtime
             MusicVolume = music; SfxVolume = sfx;
             if (AudioVolumesChanged != null) AudioVolumesChanged(MusicVolume, SfxVolume);
         }
-        bool AudioCovers(Vector2 p) { return AudioToggleRect.Contains(p) || (ShowAudio && AudioPanelRect.Contains(p)); }
-        bool AudioBlocksUnderlying { get { return audioPointerOwned || (ShowAudio && AudioPanelRect.Contains(Mouse())); } }
+        bool AudioCovers(Vector2 p) { return ShowSettings; }
+        bool AudioBlocksUnderlying { get { return audioPointerOwned || ShowSettings; } }
         void UpdateAudioPointer()
         {
             if (audioPointerFrame == Time.frameCount || app.VerificationInput) return;
@@ -94,9 +89,9 @@ namespace BlockArena.Runtime
             Vector2 p = new Vector2(screen.x / scale, (Screen.height - screen.y) / scale);
             if (pressed && !marketPointerOwned && AudioCovers(p)) {
                 audioPointerOwned = true; audioSlider = -1; ClearHover();
-                if (ShowAudio && AudioMusicSliderRect.Contains(p)) audioSlider = 0;
-                else if (ShowAudio && AudioSfxSliderRect.Contains(p)) audioSlider = 1;
-                if (audioSlider >= 0 && SoundCue != null) SoundCue("click");
+                if (SettingsControlsAvailable && settingsTab==0 && AudioMusicSliderRect.Contains(p)) audioSlider = 0;
+                else if (SettingsControlsAvailable && settingsTab==0 && AudioSfxSliderRect.Contains(p)) audioSlider = 1;
+                if (audioSlider >= 0) ClickFeedback("ui_click");
             }
             if (audioPointerOwned && audioSlider >= 0 && ShowAudio && (pressed || held || released)) {
                 Rect track = audioSlider == 0 ? AudioMusicSliderRect : AudioSfxSliderRect;
@@ -109,44 +104,21 @@ namespace BlockArena.Runtime
             }
         }
 
-        void DrawAudio()
+        bool SettingsRangeToggle(Rect r,string text,string icon,bool on)
         {
-            drawingAudio = true;
-            bool previousEnabled = GUI.enabled; GUI.enabled = !marketDragging;
-            Rect toggle = AudioToggleRect;
-            if (Button(toggle, "", ShowAudio ? new Color(.19f, .34f, .31f) : new Color(.13f, .2f, .22f))) { ShowAudio = !ShowAudio; ClearHover(); }
-            // Native pixel note avoids missing glyphs in platform fonts.
-            float y = toggle.y + lastButtonOffset;
-            Color note = MusicVolume <= .001f && SfxVolume <= .001f ? muted : gold;
-            Fill(new Rect(toggle.x + 19, y + 10, 3, 21), note); Fill(new Rect(toggle.x + 20, y + 10, 12, 4), note);
-            Fill(new Rect(toggle.x + 29, y + 10, 3, 16), note); Fill(new Rect(toggle.x + 11, y + 26, 10, 7), note);
-            Fill(new Rect(toggle.x + 23, y + 22, 9, 7), note);
-            if (!ShowAudio) { GUI.enabled = previousEnabled; drawingAudio = false; return; }
-            Rect r = AudioPanelRect; Panel(r, new Color(.06f, .10f, .11f, .99f));
-            Text(new Rect(r.x + 17, r.y + 12, 190, 29), "声音", label, gold);
-            if (IconButton(new Rect(r.xMax - 47, r.y + 9, 33, 30), "close", "", new Color(.14f, .21f, .22f))) ShowAudio = false;
-            Text(new Rect(r.x + 19, r.y + 49, 174, 27), "背景音乐", small, white);
-            Text(new Rect(r.xMax - 65, r.y + 49, 52, 27), Mathf.RoundToInt(MusicVolume * 100) + "%", micro, gold);
-            DrawAudioSlider(AudioMusicSliderRect, MusicVolume, audioSlider == 0);
-            Text(new Rect(r.x + 19, r.y + 115, 174, 27), "音效", small, white);
-            Text(new Rect(r.xMax - 65, r.y + 115, 52, 27), Mathf.RoundToInt(SfxVolume * 100) + "%", micro, gold);
-            DrawAudioSlider(AudioSfxSliderRect, SfxVolume, audioSlider == 1);
-            bool silent = MusicVolume <= .001f && SfxVolume <= .001f;
-            if (Button(new Rect(r.x + 19, r.y + 187, r.width - 38, 32), silent ? "恢复声音" : "全部静音", new Color(.16f, .25f, .24f), white, null)) {
-                if (silent) ChangeAudioVolumes(rememberedMusic, rememberedSfx);
-                else { rememberedMusic = MusicVolume; rememberedSfx = SfxVolume; ChangeAudioVolumes(0, 0); }
-                if (SoundCue != null) SoundCue("click");
-            }
-            GUI.enabled = previousEnabled; drawingAudio = false;
+            bool clicked=Button(r,"",new Color(.065f,.135f,.15f),null,"ui_toggle",true);
+            ArenaIcons.Draw(new Rect(r.x+10,r.y+10+lastButtonOffset,24,24),icon);
+            Text(new Rect(r.x+44,r.y+11+lastButtonOffset,r.width-111,27),text,small,white);
+            Rect track=new Rect(r.xMax-55,r.y+13,43,20);RoundFill(track,on?new Color(.15f,.45f,.38f):new Color(.13f,.22f,.25f),10);
+            RoundFill(new Rect(track.x+(on?24:3),track.y+3,14,14),on?mint:muted,7);return clicked;
         }
-        void DrawAudioSlider(Rect r, float value, bool dragging)
+        void DrawAudioSlider(Rect r,float value,bool dragging)
         {
-            RegisterPointerRect(r);
-            Fill(new Rect(r.x + 5, r.center.y - 3, r.width - 10, 6), new Color(.025f, .045f, .05f));
-            Fill(new Rect(r.x + 5, r.center.y - 2, (r.width - 10) * Mathf.Clamp01(value), 4), mint);
-            float x = r.x + 5 + (r.width - 10) * Mathf.Clamp01(value);
-            Fill(new Rect(x - 6, r.center.y - 9, 12, 18), copper);
-            Fill(new Rect(x - 4, r.center.y - 7, 8, 14), dragging ? white : gold);
+            RegisterPointerRect(r);RoundFill(new Rect(r.x+5,r.center.y-3,r.width-10,6),new Color(.015f,.04f,.05f),3);
+            RoundFill(new Rect(r.x+5,r.center.y-2,(r.width-10)*Mathf.Clamp01(value),4),mint,2);
+            float x=r.x+5+(r.width-10)*Mathf.Clamp01(value);
+            RoundFill(new Rect(x-8,r.center.y-10,16,20),new Color(.065f,.12f,.13f),8);
+            RoundFill(new Rect(x-6,r.center.y-8,12,16),dragging?white:gold,6);
         }
 
         public bool PointerCaptured
@@ -171,14 +143,14 @@ namespace BlockArena.Runtime
         }
         bool ModalOpen
         {
-            get { return app.ShowRoom || app.ShowHelp || app.ShowBestiary || app.State == null || app.State.phase == "finished" ||
-                (app.State.phase == "recruit" && app.Me != null && app.Me.recruitPending && !app.Me.eliminated); }
+            get { return ShowSettings || app.QuickStarting || app.ShowGameMenu || app.ShowRoom || app.ShowHelp || app.ShowBestiary || app.State == null || app.State.phase == "lobby" || app.State.phase == "finished" ||
+                RecruitVisible; }
         }
         bool MarketVisible { get { return app.CanPrepare && (app.ShowShop || marketMotion.value > .015f); } }
 
         void EnsureMarketPosition()
         {
-            if (!marketPositionSet) { marketPosition = new Vector2(width - 508, height - 538); marketPositionSet = true; }
+            if (!marketPositionSet) { marketPosition = new Vector2(width - 508, CommandDockRect.y - 446); marketPositionSet = true; }
             marketPosition.x = Mathf.Clamp(marketPosition.x, 10, Mathf.Max(10, width - 486));
             marketPosition.y = Mathf.Clamp(marketPosition.y, 10, Mathf.Max(10, height - 444));
         }
@@ -220,7 +192,7 @@ namespace BlockArena.Runtime
         {
             if (PointerCaptured) return true;
             Vector2 p = new Vector2(screen.x / scale, (Screen.height - screen.y) / scale);
-            if (AudioToggleRect.Contains(p) || (ShowAudio && (AudioMusicSliderRect.Contains(p) || AudioSfxSliderRect.Contains(p)))) return true;
+            if (SettingsControlsAvailable && settingsTab==0 && (AudioMusicSliderRect.Contains(p) || AudioSfxSliderRect.Contains(p))) return true;
             if (app.CanPrepare && app.ShowShop && !ModalOpen) {
                 Rect r = MarketScreenRect;
                 if (new Rect(r.x, r.yMax - 49 * scale, r.width - 54 * scale, 49 * scale).Contains(screen)) return true;
@@ -235,7 +207,7 @@ namespace BlockArena.Runtime
         }
         void RegisterPointerRect(Rect r, bool textInput = false)
         {
-            if (!GUI.enabled) return;
+            if (!GUI.enabled || !LayerAcceptsPointer()) return;
             Vector2 a = GUIUtility.GUIToScreenPoint(r.position), b = GUIUtility.GUIToScreenPoint(new Vector2(r.xMax, r.yMax));
             Rect screen = new Rect(a.x, Screen.height - b.y, b.x - a.x, b.y - a.y);
             if (textInput) textRects.Add(screen); else handRects.Add(screen);
@@ -256,7 +228,7 @@ namespace BlockArena.Runtime
                 (oldState.phase == "lobby" && nextState.round <= 1) ||
                 (oldState.phase == "finished" && nextState.phase != "finished");
             if (baseline) {
-                ResetRoster();
+                ResetRoster(); ClosePinnedInspection(); recruitHidden=false; recruitVisibilityRound=-1;
                 playerVisuals.Clear(); feedbackCount = 0;
                 marketPointerOwned = marketDragging = false;
                 CloseSkillDetails(); ShowOwnedSkills = false; skillPointerOwned = false; ownedSkillScroll = Vector2.zero; skillCountsFrame = -1;
@@ -295,7 +267,7 @@ namespace BlockArena.Runtime
             if (motionFrame == Time.frameCount) return;
             motionFrame = Time.frameCount;
             marketMotion.Step(app.CanPrepare && app.ShowShop ? 1 : 0, 21, .64f);
-            bool recruiting = app.State != null && app.State.phase == "recruit" && app.Me != null && app.Me.recruitPending && !app.Me.eliminated;
+            bool recruiting = RecruitVisible;
             if (recruiting && !wasRecruiting) { recruitMotion.value = recruitMotion.velocity = 0; }
             wasRecruiting = recruiting; recruitMotion.Step(recruiting ? 1 : 0, 17, .61f);
             if (app.State == null) return;

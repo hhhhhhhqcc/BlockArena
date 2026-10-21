@@ -15,13 +15,14 @@ namespace BlockArena.Runtime
         {
             PlayerState player = state == null ? null : state.players.Find(p => p.id == playerId);
             bool eligible = player != null && !player.eliminated &&
-                (state.phase == "battle" || state.phase == "prep" || (state.phase == "recruit" && player.recruitPending));
+                (state.phase == "battle" || state.phase == "prep" || state.phase == "tactics" || state.phase == "recruit");
             if (!eligible || float.IsNaN(state.timeLeft) || float.IsInfinity(state.timeLeft)) { Reset(); return 0; }
             int second = (int)Math.Ceiling(Math.Max(0, state.timeLeft));
-            if (phase != state.phase || round != state.round)
+            string timerPhase = state.phase == "recruit" ? "prep" : state.phase;
+            if (phase != timerPhase || round != state.round)
             {
                 // Joining/reconnecting establishes a baseline without a historical warning.
-                phase = state.phase; round = state.round; previousSecond = second; announced = 0;
+                phase = timerPhase; round = state.round; previousSecond = second; announced = 0;
                 return 0;
             }
             int before = previousSecond;

@@ -100,7 +100,7 @@ namespace BlockArena.Presentation
         public string UnitId, Kind;
         public Vector3 Target;
         public float Health = 1, MaximumHealth = 1, Attack, Size = 1;
-        public bool Battle, Dead, Seen, LocalCommander;
+        public bool Battle, Dead, Seen, LocalCommander, SuppressSelectionRing;
         public int Slot;
         public float Height = 1.8f;
 
@@ -137,6 +137,7 @@ namespace BlockArena.Presentation
             figure = new GameObject("Articulated model").transform;
             figure.SetParent(transform, false);
             BuildBody();
+            BuildCombatFeedback();
             if(Kind=="steve"){
                 commanderParts=figure.GetComponentsInChildren<MeshFilter>();
                 commanderNormalMeshes=new Mesh[commanderParts.Length];commanderFlashMeshes=new Mesh[commanderParts.Length];
@@ -555,6 +556,7 @@ namespace BlockArena.Presentation
             LocalCommander=false;wasDragging=false;selectionAmount=selectionVelocity=dragAmount=dragVelocity=0;landingAge=impactAge=10;
             ResetExtraFeedback();
             ResetArenaEventFeedback();
+            ResetCombatFeedback();
             SetCommanderFlash(false);
             teamRingMesh.sharedMesh = VoxelAssets.TeamRing(slot);
             healthRoot.gameObject.SetActive(false);
@@ -568,6 +570,7 @@ namespace BlockArena.Presentation
             ResetArenaEventFeedback();
             SetSkillHighlighted(false);executionPlaying=false;
             SetCommanderFlash(false);
+            ResetCombatFeedback();
             if (healthRoot != null) healthRoot.gameObject.SetActive(false);
         }
 
@@ -595,6 +598,7 @@ namespace BlockArena.Presentation
         public void Step(float dt, float time, Camera camera, bool selected, Vector3? drag)
         {
             dt = Mathf.Max(dt, 0);
+            ObserveCombatFeedback(dt);
             bool dragging=drag.HasValue&&!Battle&&Kind!="steve"&&!Dead;
             if(wasDragging&&!dragging)landingAge=0;
             wasDragging=dragging;landingAge=Mathf.Min(10,landingAge+dt);impactAge=Mathf.Min(10,impactAge+dt);
@@ -609,12 +613,13 @@ namespace BlockArena.Presentation
             Vector3 flatDelta = new Vector3(delta.x, 0, delta.z);
             if (flatDelta.sqrMagnitude > .0015f)
                 facing = Quaternion.Slerp(facing, Quaternion.LookRotation(-flatDelta.normalized, Vector3.up), 1 - Mathf.Exp(-10 * dt));
+            UpdateCombatFacing(dt);
 
             float tempo = modelFamily == "golem" ? 5.2f : modelFamily == "spider" ? 12 : 8;
             float walk = Mathf.Sin(time * tempo + seed);
             float dance = Mathf.Sin(time * 3.2f + seed);
             float idle = Battle ? 0 : 1;
-            float strike = Attack > 0 ? Mathf.Sin(Mathf.Clamp01(Attack / .22f) * Mathf.PI) : 0;
+            float strike = Kind == "steve" ? (Attack > 0 ? Mathf.Sin(Mathf.Clamp01(Attack / .22f) * Mathf.PI) : 0) : CombatStrike();
             float bounce = Mathf.Abs(walk) * movementBlend * (modelFamily == "golem" ? .018f : .032f) + Mathf.Abs(dance) * idle * .025f;
             float lean = modelFamily == "zombie" ? 3 + movementBlend * 3 : modelFamily == "spider" ? 0 : movementBlend * 2;
             float sway = dance * idle * (modelFamily == "golem" ? 1.4f : 3);
@@ -622,7 +627,7 @@ namespace BlockArena.Presentation
             figure.rotation = facing * Quaternion.Euler(lean - strike * 5, idle * dance * 4, Dead ? deathProgress * 82 : sway);
             figure.localPosition = new Vector3(0, bounce - deathProgress * .1f, 0) + facing * Vector3.back * (strike * .07f);
             figure.localScale = Vector3.one;
-            transform.localScale = Vector3.one * Mathf.Max(.12f, Size * (1 - deathProgress * .65f));
+            transform.localScale = Vector3.one * Mathf.Max(.12f, Size * (1 - (Kind == "steve" ? deathProgress : 0) * .65f));
 
             if (modelFamily == "slime")
             {
@@ -686,13 +691,14 @@ namespace BlockArena.Presentation
                 if(head!=null)head.localRotation*=Quaternion.Euler(-jump*15,0,0);
             }
             SetCommanderFlash(Kind=="steve"&&impactAge<.34f&&(impactAge<.13f||impactAge>.22f));
+            StepCombatPose(strike);
             StepExecution(time);
             float footprint=Mathf.Clamp(modelFootprint/.57f,.6f,2.8f);
             float ringSize=footprint*(.82f+Mathf.Clamp(selectionAmount,0,1.3f)*.2f+dragAmount*.13f);
             selection.localScale=new Vector3(ringSize,1,ringSize);
             selection.localPosition=new Vector3(0,.04f+dragAmount*.012f,0);
             bool visibleCommander=Kind!="steve"||figure.gameObject.activeSelf;
-            selection.gameObject.SetActive(!Dead&&visibleCommander&&selectionAmount>.02f);
+            selection.gameObject.SetActive(!SuppressSelectionRing&&!Dead&&visibleCommander&&selectionAmount>.02f);
             float teamSize=footprint*(Kind=="steve"&&LocalCommander?1.2f:1);
             teamRing.localScale=new Vector3(teamSize,1,teamSize);
             teamRing.gameObject.SetActive(!Dead&&visibleCommander);

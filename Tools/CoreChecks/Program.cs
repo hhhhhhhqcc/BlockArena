@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -51,7 +51,24 @@ internal static partial class Program
         if (!withEvent) game.State.roundEvent = new ArenaEventState { kind = "none", round = game.State.round };
         foreach (PlayerState p in game.State.players) if (!p.eliminated) p.ready = true;
         for (int i = 0; i < 30 && game.State.phase == "prep"; i++) game.Tick(.05f);
+        FinishDeployment(game);
+        // Legacy numeric checks exercise creature rules on the original flat, clear arena.
+        game.State.battlefield=null;
+        foreach(var fighter in game.State.fighters){
+            var owner=game.State.players.Find(p=>p.id==fighter.ownerId);
+            var unit=owner==null?null:owner.units.Find(u=>u.id==fighter.unitId);
+            if(unit!=null){fighter.x=unit.x;fighter.y=unit.y;}
+        }
         Equal("battle", game.State.phase);
+    }
+    private static void FinishDeployment(ArenaGame game)
+    {
+        for(int i=0;i<Math.Ceiling(ArenaGame.RevealSeconds/.05f)+5&&game.State.phase=="reveal";i++)game.Tick(.05f);
+        if(game.State.phase=="tactics"){
+            foreach(var p in game.State.players)if(!p.eliminated&&!p.ready)game.Apply(p.id,new GameCommand{type="tactics_ready"});
+            for(int i=0;i<40&&game.State.phase=="tactics";i++)game.Tick(.05f);
+        }
+        Equal("battle",game.State.phase);
     }
     private static ArenaGame Fight(string kindA, string kindB, int countB = 1)
     {
@@ -106,7 +123,7 @@ internal static partial class Program
             ArenaGame g = new ArenaGame("a", "甲"); string before = Json(g.State);
             Reject(() => g.Apply("a", new GameCommand { type = "start", bots = false })); Equal(before, Json(g.State));
             g.AddPlayer("b", "乙"); Reject(() => g.Apply("b", new GameCommand { type = "start" }));
-            g.Apply("a", new GameCommand { type = "start" }); Equal("recruit", g.State.phase); Equal(1, g.State.round); Near(25, g.State.timeLeft);
+            g.Apply("a", new GameCommand { type = "start" }); Equal("recruit", g.State.phase); Equal(1, g.State.round); Near(45, g.State.timeLeft);
             Equal(4, g.State.players.Count); Equal(2, g.State.players.Count(p => p.bot));
             foreach (PlayerState p in g.State.players) { Equal(12, p.gold); Equal(20, p.hp); Equal(2, p.units.Count); Assert(p.recruitPending && p.recruitChoice == null); Equal(3, p.shop.Distinct().Count()); Assert(p.shop.All(k=>CreatureCatalog.Get(k).tier<=2)); }
             Reject(() => g.AddPlayer("late", "迟到"));
@@ -123,24 +140,24 @@ internal static partial class Program
             g.Apply("b", new GameCommand { type = "choose", index = 0 }); Equal("prep", g.State.phase); Near(ArenaGame.PrepSeconds, g.State.timeLeft);
             Reject(() => g.Apply("a", new GameCommand { type = "choose", index = 0 }));
         });
-        Check("selected players deploy and ready while unselected players wait", () =>
+        Check("players can deploy while recruitment is hidden, but must finish recruiting before readying", () =>
         {
             ArenaGame g = Two(false); PlayerState a = g.State.players[0];
             Reject(() => g.Apply("a", new GameCommand { type = "ready" }));
-            Reject(() => g.Apply("a", new GameCommand { type = "place", unitId = a.units[0].id, y = 220 }));
+            g.Apply("a", new GameCommand { type = "place", unitId = a.units[0].id, y = 220 });Near(220,a.units[0].y);Assert(a.recruitPending);
             g.Apply("a", new GameCommand { type = "choose", index = 0 });
             g.Apply("a", new GameCommand { type = "place", unitId = a.units[0].id, x = 123.456f, y = 222.789f });
             g.Apply("a", new GameCommand { type = "ready" }); Equal("recruit", g.State.phase); Assert(a.ready);
             PlayerState refreshed = g.SnapshotFor("a").players[0]; Equal(a.recruitChoice, refreshed.recruitChoice); Assert(!refreshed.recruitPending); Near(123.456f, refreshed.units[0].x);
             g.Apply("b", new GameCommand { type = "choose", index = 0 }); Assert(a.ready); g.Apply("b", new GameCommand { type = "ready" });
-            Advance(g, .4f); Equal("prep", g.State.phase); Advance(g, .75f); Equal("battle", g.State.phase);
+            Advance(g, .4f); Equal("prep", g.State.phase); Advance(g, .75f); Equal("reveal", g.State.phase); FinishDeployment(g);
         });
-        Check("recruit timeout auto-selects once without requiring player input", () =>
+        Check("shared preparation timeout completes recruitment and proceeds directly to reveal", () =>
         {
             ArenaGame g = Two(false); g.Apply("a", new GameCommand { type = "choose", index = 0 }); string chosen = g.State.players[0].recruitChoice;
-            Advance(g, 25.1f); Equal("prep", g.State.phase); Equal(1, g.State.round);
+            Advance(g, ArenaGame.PrepSeconds+.05f); Equal("reveal", g.State.phase); Equal(1, g.State.round);
             foreach (PlayerState p in g.State.players) { Assert(!p.recruitPending && p.recruitChoice != null); Equal(3, p.units.Count); }
-            Equal(chosen, g.State.players[0].recruitChoice); Assert(g.State.timeLeft > 29);
+            Equal(chosen, g.State.players[0].recruitChoice); Assert(g.State.timeLeft <= ArenaGame.RevealSeconds);
         });
         Check("paid recruiting retains unlimited rosters and rejects unsupported commands", () =>
         {
@@ -289,7 +306,7 @@ internal static partial class Program
         Check("disconnect AI recruits, deploys and readies; explicit leave preserves roster", () =>
         {
             ArenaGame g = Two(false); g.SetConnected("b", false); g.Apply("a", new GameCommand { type = "choose", index = 0 }); g.Apply("a", new GameCommand { type = "ready" });
-            Advance(g, 5); Equal("battle", g.State.phase); Equal(3, g.State.players[1].units.Count); Assert(!g.State.players[1].bot);
+            Advance(g, 5); Equal("reveal", g.State.phase); FinishDeployment(g); Equal(3, g.State.players[1].units.Count); Assert(!g.State.players[1].bot);
             g.SetConnected("b", true); Assert(g.State.players[1].connected);
             int count = g.State.players[0].units.Count; g.RemovePlayer("a"); Equal(count, g.State.players[0].units.Count); Assert(g.State.players[0].bot && !g.State.players[0].connected);
         });
@@ -360,20 +377,26 @@ internal static partial class Program
             PlayerState eliminated = g.State.players[1]; eliminated.hp = 1; Battle(g);
             foreach (FighterState f in g.State.fighters) f.hp = (4 - f.slot) * 10;
             g.State.timeLeft = .001f; g.Tick(.05f); Assert(eliminated.eliminated); int count = eliminated.units.Count;
-            Advance(g, g.State.timeLeft+.1f); Equal("recruit", g.State.phase); Assert(!eliminated.recruitPending && eliminated.recruitChoice == null); Equal(0, eliminated.shop.Length); Equal(count, eliminated.units.Count);
+            Advance(g, g.State.timeLeft+.1f); Equal("recruit", g.State.phase); Assert(!eliminated.recruitPending && eliminated.recruitChoice == null); Equal(0, eliminated.shop.Length); Equal(0, eliminated.units.Count);
             Reject(() => g.Apply(eliminated.id, new GameCommand { type = "choose", index = 0 }));
         });
-        Check("last surviving player wins; only host can restart into a fresh recruit", () =>
+        Check("last surviving player wins; host returns connected players to a clean lobby before a new match", () =>
         {
             ArenaGame g = Two(); g.State.players[1].hp = 1; Battle(g); Timeout(g); Equal("finished", g.State.phase); Equal("a", g.State.winnerId);
             Reject(() => g.Apply("b", new GameCommand { type = "move", dx = 1 })); Reject(() => g.Apply("b", new GameCommand { type = "restart" }));
-            g.Apply("a", new GameCommand { type = "restart" }); Equal("recruit", g.State.phase); Equal(1, g.State.round);
-            Assert(g.State.players.All(p => p.hp == 20 && !p.eliminated && p.recruitPending && p.units.Count == 2));
+            g.Apply("a", new GameCommand { type = "restart" }); Equal("lobby", g.State.phase); Equal(0, g.State.round);
+            Assert(g.State.players.All(p => p.hp == 20 && !p.eliminated && !p.recruitPending && p.units.Count == 0));
+            Assert(g.State.battlefield==null&&g.State.fighters.Count==0&&g.State.placements.Count==0);
+            g.AddPlayer("c","新玩家");g.Apply("a",new GameCommand{type="start",bots=false});
+            Equal("recruit",g.State.phase);Equal(1,g.State.round);Equal(3,g.State.players.Count);
         });
         EconomyChecks();
         AbilityChecks();
+        EffectChecks();
         RitualChecks();
         AntiSnowballChecks();
+        WorldRulesChecks();
+        TacticsChecks();
         Check("seeded four-player AI match completes without hanging", () =>
         {
             ArenaGame g = new ArenaGame("host", "测试", 2026); g.Apply("host", new GameCommand { type = "start" }); g.SetConnected("host", false);

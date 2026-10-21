@@ -11,6 +11,7 @@ namespace BlockArena.Core
         private static readonly Dictionary<string, AbilityDefinition> definitions = new Dictionary<string, AbilityDefinition>(StringComparer.Ordinal);
         private static readonly string[] empty = new string[0];
         [ThreadStatic] private static bool reflecting;
+        [ThreadStatic] internal static bool PeriodicDamage;
 
         static CreatureAbilities()
         {
@@ -124,7 +125,7 @@ namespace BlockArena.Core
             if (f.dead) return;
             TickBurn(f, dt, damage);
             if (f.dead) return;
-            f.hp = Math.Min(f.maxHp, f.hp + Sum(f, "regen") * dt);
+            f.hp = Math.Min(f.maxHp, f.hp + Sum(f, "regen") * dt * f.healingMultiplier);
             if (f.stunTime > 0) return;
             foreach (string id in SkillIds(f))
             {
@@ -181,7 +182,9 @@ namespace BlockArena.Core
             while (!f.dead && (f.poisonTick >= .5f || f.poisonTime <= 0 && f.poisonTick > .00001f))
             {
                 float step = Math.Min(.5f, f.poisonTick); f.poisonTick -= step;
-                damage(f, f.poisonDps * step, f.poisonSource);
+                bool previous=PeriodicDamage;PeriodicDamage=true;
+                try { damage(f, f.poisonDps * step, f.poisonSource); }
+                finally { PeriodicDamage=previous; }
             }
             if (f.poisonTime <= 0) { f.poisonDps = 0; f.poisonSource = null; f.poisonTick = 0; }
         }
@@ -192,14 +195,16 @@ namespace BlockArena.Core
             while (!f.dead && (f.burnTick >= .5f || f.burnTime <= 0 && f.burnTick > .00001f))
             {
                 float step = Math.Min(.5f, f.burnTick); f.burnTick -= step;
-                damage(f, f.burnDps * step, f.burnSource);
+                bool previous=PeriodicDamage;PeriodicDamage=true;
+                try { damage(f, f.burnDps * step * f.environmentDamage, f.burnSource); }
+                finally { PeriodicDamage=previous; }
             }
             if (f.burnTime <= 0) { f.burnDps = 0; f.burnSource = null; f.burnTick = 0; }
         }
         private static void Heal(FighterState source, FighterState patient, float amount, Action<string, FighterState, FighterState, float> effect)
         {
             if (patient == null || patient.dead || amount <= 0) return;
-            float actual = Math.Max(0, Math.Min(amount, patient.maxHp - patient.hp));
+            float actual = Math.Max(0, Math.Min(amount * patient.healingMultiplier, patient.maxHp - patient.hp));
             if (actual <= 0) return;
             patient.hp += actual; effect?.Invoke("heal", source, patient, actual);
         }
@@ -223,6 +228,7 @@ namespace BlockArena.Core
             float bonus = (f.attacks == 1 ? Sum(f, "charge") : 0) + (f.hp < f.maxHp * .5f ? Sum(f, "frenzy") : 0)
                 + (target.hp < target.maxHp * .3f ? Sum(f, "execute") : 0);
             if (f.range > 70) effect?.Invoke("arrow", f, target, 0);
+            else effect?.Invoke("strike", f, target, 0);
             float before = target.hp + target.shield;
             damage(target, f.attack * (1 + bonus), f);
             bool hit = target.hp + target.shield < before;
@@ -244,19 +250,23 @@ namespace BlockArena.Core
                 switch (a.effect)
                 {
                     case "poison":
+                        if(target.resistanceTime>0)break;
                         if (target.poisonTime <= 0 || a.value >= target.poisonDps)
                         { target.poisonDps = a.value; target.poisonSource = f; target.poisonTime = Math.Max(target.poisonTime, a.duration); }
                         effect?.Invoke("poison", f, target, a.value); Cooldown(f, a); break;
                     case "burn":
+                        if(target.resistanceTime>0)break;
                         if (target.burnTime <= 0 || a.value >= target.burnDps)
                         { target.burnDps = a.value; target.burnSource = f; target.burnTime = Math.Max(target.burnTime, a.duration); }
                         effect?.Invoke("burn", f, target, a.value); Cooldown(f, a); break;
                     case "slow":
-                        target.slowTime = Math.Max(target.slowTime, a.duration);
+                        if(target.resistanceTime>0)break;
+                        target.slowTime = Math.Max(target.slowTime, a.duration * target.statusDurationMultiplier);
                         target.slowMultiplier = Math.Min(target.slowMultiplier, Clamp(1 - a.value, .1f, 1));
                         effect?.Invoke("slow", f, target, a.duration); Cooldown(f, a); break;
                     case "stun":
-                        target.stunTime = Math.Max(target.stunTime, a.duration);
+                        if(target.resistanceTime>0)break;
+                        target.stunTime = Math.Max(target.stunTime, a.duration * target.statusDurationMultiplier);
                         effect?.Invoke("stun", f, target, a.duration); Cooldown(f, a); break;
                     case "knockback":
                         float distance = Distance(f, target), dx = target.x - f.x, dy = target.y - f.y;
