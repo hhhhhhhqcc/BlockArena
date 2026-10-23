@@ -73,13 +73,7 @@ namespace BlockArena.Presentation
             EnsureCombatVfx();
             CombatVfx v;
             if(combatVfxPool.Count>0) v=combatVfxPool.Pop();
-            else
-            {
-                GameObject g=new GameObject("Pooled battle accent"); g.transform.SetParent(effectRoot,false);
-                v=new CombatVfx { transform=g.transform,filter=g.AddComponent<MeshFilter>(),renderer=g.AddComponent<MeshRenderer>() };
-                v.renderer.sharedMaterial=combatMaterial; v.renderer.shadowCastingMode=ShadowCastingMode.Off;
-                v.renderer.receiveShadows=false; combatAllocated++;
-            }
+            else v=CreateCombatAccent();
             v.motion=motion; v.filter.sharedMesh=mesh; v.start=v.end=at; v.color=color;
             v.age=v.nextTrail=v.arc=v.spin=0; v.duration=Mathf.Max(.08f,duration); v.scale=scale;
             v.rotation=rotation; v.family=null;

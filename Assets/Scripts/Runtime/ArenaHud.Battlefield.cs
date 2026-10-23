@@ -12,7 +12,7 @@ namespace BlockArena.Runtime
         string battlefieldUiPhase;
         int battlefieldUiRound=-1;
         bool battlefieldKeyboardCaptured;
-        public bool KeyboardCaptured { get { return ShowSettings||app.QuickStarting||app.ShowGameMenu||app.ShowRoom||app.ShowHelp||app.ShowBestiary||app.State==null||app.State.phase=="lobby"||battlefieldKeyboardCaptured; } }
+        public bool KeyboardCaptured { get { return CommunicationInputActive||ShowSettings||app.QuickStarting||app.ShowGameMenu||app.ShowRoom||app.ShowBestiary||app.State==null||app.State.phase=="lobby"||battlefieldKeyboardCaptured; } }
         readonly Color routeBlue=new Color(.39f,.83f,1);
         Rect WorldSummaryRect { get { Rect r=HeaderRect;return new Rect(r.x+227,r.y+7,359,40); } }
         Rect WorldOptionsRect { get { return LobbyWorldPanelRect; } }
@@ -44,7 +44,7 @@ namespace BlockArena.Runtime
         Rect TacticsReadyRect { get { return ReadyRect; } }
         bool CommanderSelectable { get { return app.State!=null&&app.Me!=null&&!app.Me.eliminated&&!app.Me.ready&&
             (app.State.phase=="lobby"||app.State.phase=="prep"||app.State.phase=="recruit"||app.State.phase=="tactics"); } }
-        bool BattlefieldHidden { get { return ShowSettings||app.QuickStarting||app.State==null||app.Tactics==null||app.ShowGameMenu||app.ShowHelp||app.ShowBestiary||app.State.phase=="finished"; } }
+        bool BattlefieldHidden { get { return ShowSettings||app.QuickStarting||app.State==null||app.Tactics==null||app.ShowGameMenu||app.ShowBestiary||app.State.phase=="finished"; } }
         bool WorldSummaryVisible { get { return app.State!=null&&app.State.battlefield!=null&&
             !(app.State.phase=="reveal"&&(app.State.revealStage=="arena"||app.State.revealStage=="map")); } }
 
@@ -168,7 +168,7 @@ namespace BlockArena.Runtime
             DrawCommanderGlyph(new Rect(toggle.x+10,glyphY,30,30),definition.id,mint);
             Text(new Rect(toggle.x+50,toggle.center.y-14+lastButtonOffset,toggle.width-81,29),definition.name,small,white);
             Text(new Rect(toggle.xMax-30,toggle.center.y-13,20,27),CommanderSelectable?(app.Tactics.SkillPickerOpen?"−":"+"):"✓",small,gold);
-            if(toggle.Contains(Mouse()))SetCommanderHover("指挥技 · "+definition.name,CommanderTooltipBody(definition.id),HudPointer);
+            if(toggle.Contains(Mouse()))SetCommanderHover("指挥技 · "+definition.name,CommanderTooltipBody(definition.id,app.Keys.Label("cast")),HudPointer);
             commanderPickerReveal.Step(app.Tactics.SkillPickerOpen?1:0,23,.58f);
             if(!app.Tactics.SkillPickerOpen||!CommanderSelectable){drawingCommander=false;return;}
             Rect r=CommanderPickerRect;RoundedPanel(r,new Color(.035f,.075f,.09f,.99f));
@@ -184,14 +184,14 @@ namespace BlockArena.Runtime
                 DrawCommanderGlyph(new Rect(card.x+9,card.y+8+lastButtonOffset+bump,28,28),skill.id,selected?mint:gold);
                 Text(new Rect(card.x+47,card.y+9+lastButtonOffset,card.width-64,27),skill.name,small,selected?mint:white);
                 if(selected)RoundFill(new Rect(card.xMax-13,card.center.y-3,6,6),mint,3);
-                if(card.Contains(Mouse()))SetCommanderHover(skill.name,CommanderTooltipBody(skill.id),HudPointer);
+                if(card.Contains(Mouse()))SetCommanderHover(skill.name,CommanderTooltipBody(skill.id,app.Keys.Label("cast")),HudPointer);
             }
             drawingCommander=false;
         }
-        internal static string CommanderTooltipBody(string id)
+        internal static string CommanderTooltipBody(string id,string castKey="R")
         {
             // SetHover accepts plain catalog text and applies Format once. Do not put rich tags here.
-            return BattlefieldCatalog.GetCommander(id).description+"\nQ 瞄准 · 再按 Q / 左键施放\n每场 2 次 · 冷却 8 秒";
+            return BattlefieldCatalog.GetCommander(id).description+"\n"+castKey+" 瞄准 · 再按 "+castKey+" / 左键施放\n每场 2 次 · 冷却 8 秒";
         }
         static string CommanderBrief(string id)
         {
@@ -206,13 +206,14 @@ namespace BlockArena.Runtime
             bool before=GUI.enabled;GUI.enabled=before&&available;
             if(Button(r,"",app.Tactics.Targeting?new Color(.21f,.38f,.36f):new Color(.045f,.10f,.12f)))app.Tactics.ArmSkill(false);
             GUI.enabled=before;
-            RoundFill(new Rect(r.x+9,r.y+12,27,30),available?new Color(.20f,.36f,.31f):new Color(.12f,.18f,.20f),5);
-            Text(new Rect(r.x+9,r.y+12,27,30),"Q",centered,available?mint:muted);
-            DrawCommanderGlyph(new Rect(r.x+44,r.y+11,32,32),skill.id,available?mint:muted);
-            Text(new Rect(r.x+85,r.y+5,141,25),skill.name,small,white);
-            string status=app.Tactics.Targeting?"Q / 点击施放":me.commanderUses<=0?"0 / 2":me.commanderCooldown>0?"冷却 "+me.commanderCooldown.ToString("0.0")+"s":""+me.commanderUses+" / 2";
-            Text(new Rect(r.x+85,r.y+29,141,22),status,micro,available?mint:muted);
-            if(r.Contains(Mouse()))SetCommanderHover(skill.name,CommanderTooltipBody(skill.id),HudPointer);
+            string castKey=app.Keys.Label("cast");float keyWidth=Mathf.Clamp(castKey.Length*11,27,64),keyShift=keyWidth-27;
+            RoundFill(new Rect(r.x+9,r.y+12,keyWidth,30),available?new Color(.20f,.36f,.31f):new Color(.12f,.18f,.20f),5);
+            Text(new Rect(r.x+9,r.y+12,keyWidth,30),castKey,centered,available?mint:muted);
+            DrawCommanderGlyph(new Rect(r.x+44+keyShift,r.y+11,32,32),skill.id,available?mint:muted);
+            Text(new Rect(r.x+85+keyShift,r.y+5,141-keyShift,25),skill.name,small,white);
+            string status=app.Tactics.Targeting?app.Keys.Label("cast")+" / 点击施放":me.commanderUses<=0?"0 / 2":me.commanderCooldown>0?"冷却 "+me.commanderCooldown.ToString("0.0")+"s":""+me.commanderUses+" / 2";
+            Text(new Rect(r.x+85+keyShift,r.y+29,141-keyShift,22),status,micro,available?mint:muted);
+            if(r.Contains(Mouse()))SetCommanderHover(skill.name,CommanderTooltipBody(skill.id,app.Keys.Label("cast")),HudPointer);
             float cooldown=Mathf.Clamp01(me.commanderCooldown/8f);
             Fill(new Rect(r.x+85,r.yMax-5,133*(1-cooldown),2),available?mint:gold);
             if(app.Tactics.Targeting)DrawCommanderTarget(skill);

@@ -17,7 +17,8 @@ namespace BlockArena.Runtime
         public bool ShowOwnedSkills { get; set; }
         public bool HasSkillDetails { get { return !string.IsNullOrEmpty(detailSkillId); } }
         Vector2 HudPointer { get { return app.VerificationInput && app.VerificationPointer.HasValue ? app.VerificationPointer.Value : (Vector2)Input.mousePosition; } }
-        bool SkillUiAvailable { get { return app.State != null && app.Me != null && app.State.phase != "lobby" && !ModalOpen; } }
+        bool SkillUiAvailable { get { return CommandDockVisible; } }
+        bool OwnedSkillToggleVisible { get { if(!SkillUiAvailable)return false;RefreshSkillCounts();return ownedSkills.Count>0; } }
         Rect OwnedSkillToggleRect { get { Rect r=CommandDockRect;return new Rect(r.x+270,r.y+22,132,44); } }
         Rect OwnedSkillPanelRect { get { return new Rect(CommandDockRect.x+257, Mathf.Max(84, CommandDockRect.y-354), 344, 344); } }
         Rect OwnedSkillViewport { get { Rect r = OwnedSkillPanelRect; return new Rect(r.x + 12, r.y + 55, r.width - 24, r.height - 69); } }
@@ -42,6 +43,8 @@ namespace BlockArena.Runtime
         internal Rect FirstSkillCardScreenRect { get { Metrics(); return ToScreenRect(MarketSkillCardRect(0)); } }
         internal Rect SkillDetailsScreenRect { get { Metrics(); return ToScreenRect(SkillDetailsRect); } }
         internal Rect OwnedSkillsScreenRect { get { Metrics(); return ToScreenRect(OwnedSkillPanelRect); } }
+        internal Rect OwnedSkillButtonScreenRect { get { Metrics();return OwnedSkillToggleVisible?ToScreenRect(OwnedSkillToggleRect):Rect.zero; } }
+        internal Rect OwnedSkillButtonAnchorScreenRect { get { Metrics();return ToScreenRect(OwnedSkillToggleRect); } }
         internal int SkillDetailSpeciesCount { get { return HasSkillDetails ? ApplicableSpecies(TradeCatalog.Get(detailSkillId)).Count : 0; } }
         internal int SkillDetailMatchingUnits { get { return HasSkillDetails ? MatchingArmyCount(TradeCatalog.Get(detailSkillId)) : 0; } }
         internal void PreviewSkillForVerification(string skillId) { OpenSkillDetails(skillId); }
@@ -62,7 +65,7 @@ namespace BlockArena.Runtime
                 Vector2 p = Mouse();
                 if (AudioCovers(p)) return null;
                 if (HasSkillDetails && SkillDetailsRect.Contains(p)) return detailSkillId;
-                if (ShowOwnedSkills && OwnedSkillPanelRect.Contains(p)) {
+                if (OwnedSkillToggleVisible && ShowOwnedSkills && OwnedSkillPanelRect.Contains(p)) {
                     RefreshSkillCounts(); Rect viewport = OwnedSkillViewport;
                     if (!viewport.Contains(p) || p.x > viewport.xMax - 18) return null;
                     float rowY = p.y - viewport.y + ownedSkillScroll.y;
@@ -78,7 +81,7 @@ namespace BlockArena.Runtime
         }
         bool SkillUiCovers(Vector2 p)
         {
-            return SkillUiAvailable && (OwnedSkillToggleRect.Contains(p) || (ShowOwnedSkills && OwnedSkillPanelRect.Contains(p)) || (HasSkillDetails && SkillDetailsRect.Contains(p)));
+            return SkillUiAvailable && ((OwnedSkillToggleVisible && (OwnedSkillToggleRect.Contains(p) || ShowOwnedSkills && OwnedSkillPanelRect.Contains(p))) || (HasSkillDetails && SkillDetailsRect.Contains(p)));
         }
         bool SkillBlocksUnderlying { get { return skillPointerOwned || SkillUiCovers(Mouse()); } }
         void UpdateSkillPointer()
@@ -91,7 +94,7 @@ namespace BlockArena.Runtime
             Metrics(); skillPointerFrame = Time.frameCount;
             Vector2 p = new Vector2(screen.x / scale, (Screen.height - screen.y) / scale);
             if (!SkillUiAvailable) { if (skillPointerOwned) skillReleasedFrame = Time.frameCount; skillPointerOwned = false; return; }
-            if (pressed && !marketPointerOwned && !audioPointerOwned && !AudioCovers(p) && SkillUiCovers(p)) skillPointerOwned = true;
+            if (pressed && !inspectionPointerOwned && !inspectionDragging && !PinnedInspectionCovers(p) && !marketPointerOwned && !audioPointerOwned && !AudioCovers(p) && SkillUiCovers(p)) skillPointerOwned = true;
             if (released || (!held && !pressed)) { if (skillPointerOwned) skillReleasedFrame = Time.frameCount; skillPointerOwned = false; }
         }
         void RefreshSkillCounts()
@@ -143,12 +146,21 @@ namespace BlockArena.Runtime
 
         void DrawSkillPanels()
         {
-            if (!SkillUiAvailable) return;
+            if (!SkillUiAvailable) {
+                if(app.State==null||app.State.phase=="results"||app.State.phase=="reveal"||app.State.phase=="finished"||app.State.phase=="lobby"){
+                    ShowOwnedSkills=false;
+                    if(HasSkillDetails)CloseSkillDetails();
+                }
+                return;
+            }
             RefreshSkillCounts(); drawingSkills = true;
             bool previous = GUI.enabled, active = previous&&!marketDragging;
             GUI.enabled = active;
-            if (IconButton(OwnedSkillToggleRect, "book", "技能  " + ownedSkills.Count, new Color(.11f, .20f, .22f))) ShowOwnedSkills = !ShowOwnedSkills;
-            if(OwnedSkillToggleRect.Contains(Mouse()))SetHover("已购技能",ownedSkills.Count+" 项永久技能。",HudPointer);
+            if(ownedSkills.Count==0)ShowOwnedSkills=false;
+            else {
+                if (IconButton(OwnedSkillToggleRect, "book", "技能  " + ownedSkills.Count, new Color(.11f, .20f, .22f))) ShowOwnedSkills = !ShowOwnedSkills;
+                if(OwnedSkillToggleRect.Contains(Mouse()))SetHover("已购技能",ownedSkills.Count+" 项永久技能。",HudPointer);
+            }
             if (ShowOwnedSkills) DrawOwnedSkills();
             GUI.enabled = active;
             if (HasSkillDetails) {drawingSkillDetails=true;DrawSkillDetails();drawingSkillDetails=false;}

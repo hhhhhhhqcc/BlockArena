@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -61,19 +61,19 @@ sealed class NetworkCheck : IDisposable
 
     public void Run()
     {
-        Require(WireProtocol.Version == 7, "Shared preparation and per-round commander selection require protocol v7.");
+        Require(WireProtocol.Version == 11, "Concealment provenance and host exposure timers require protocol v11.");
         if (server != null) { CheckFreshRooms(); CheckSharedPreparation(); CheckLobbyDisconnectSeats(); }
         using (var legacy = OpenRaw())
         {
-            byte[] payload = Encoding.UTF8.GetBytes(rawCodec.Encode(new WirePacket { type = "hello", protocol = 6, name = "旧版客户端" }));
+            byte[] payload = Encoding.UTF8.GetBytes(rawCodec.Encode(new WirePacket { type = "hello", protocol = 10, name = "旧版客户端" }));
             byte[] header = Header(payload.Length);
             legacy.GetStream().Write(header, 0, header.Length); legacy.GetStream().Write(payload, 0, payload.Length);
             WirePacket response = ReadRawPacket(legacy);
-            Require(response.type == "error" && response.message.Contains("协议版本不一致") && response.protocol == 7,
-                "A v6 client was not explicitly rejected before handshake.");
+            Require(response.type == "error" && response.message.Contains("协议版本不一致") && response.protocol == WireProtocol.Version,
+                "A v8 client was not explicitly rejected before handshake.");
             Require(string.IsNullOrEmpty(response.placementId), "A handshake error carried a placement ID.");
         }
-        Pass("protocol v6 explicitly rejected before joining the v7 game");
+        Pass("protocol v10 explicitly rejected before joining the v11 game");
 
         for (int i = 0; i < 4; i++)
         {
@@ -327,7 +327,8 @@ sealed class NetworkCheck : IDisposable
         Require(clients.All(c=>c.State.battlefield!=null&&c.State.battlefield.mapId=="courtyards"&&c.State.battlefield.weather=="clear"&&
             c.State.battlefield.terrain.Any(t=>t.kind=="chasm")&&c.State.battlefield.terrain.Count(t=>t.kind=="bridge")==4&&
             c.State.battlefield.objectives.Any(o=>o.kind=="altar")),"Map and terrain diverged or weather was revealed too early.");
-        Require(clients.All(c=>Math.Abs(c.State.battlefield.terrain.Single(t=>t.kind=="highland").height-1.45f)<.001f),"World height units did not survive TCP serialization.");
+        Require(clients.All(c=>Math.Abs(c.State.battlefield.terrain.Single(t=>t.id=="central-highland").height-1.65f)<.001f),"Authored central highland height did not survive TCP serialization.");
+        Require(clients.All(c=>c.State.battlefield.objectives.Count(o=>o.kind=="supply")==4),"Designed outer-courtyard reward routes were not synchronized.");
         int revealSeed=clients[0].State.battlefield.seed;
         Require(clients.All(c=>c.State.battlefield.seed==revealSeed),"Clients received different battlefield seeds.");
         Wait(()=>clients.All(c=>c.State.phase=="reveal"&&c.State.revealStage=="weather"),8000,"terrain fully emerged before weather draw");
@@ -340,7 +341,19 @@ sealed class NetworkCheck : IDisposable
         CheckPrivateTacticalPlans();
         for(int i=0;i<4;i++)clients[i].Send(new GameCommand{type="tactics_ready"});
         Wait(() => clients.All(c => c.State.phase == "battle"), 8000, "all-ready tactics to battle");
-        Require(clients.All(c => c.State.fighters.Count(f => !f.neutral) >= 8), "Player battle units were not broadcast.");
+        Require(clients.All(c=>c.State.timeLeft>116&&c.State.timeLeft<=120),"Battle limit is not synchronized at 120 seconds.");
+        Require(clients.All(c => Own(c).units.All(u => c.State.fighters.Any(f => f.ownerId == c.PlayerId && f.unitId == u.id && !f.summoned))),
+            "Every original friendly battle unit must remain in its owner's personalized snapshot.");
+        Require(clients.All(c => c.State.fighters.Where(f => f.ownerId != c.PlayerId && f.hidden).All(enemy =>
+            c.State.fighters.Any(ally => !ally.dead && ally.ownerId == c.PlayerId && BattlefieldVision.CanSee(c.State.battlefield,ally,enemy)))),
+            "Personalized snapshots exposed an undiscovered concealed enemy.");
+        Require(clients.All(c=>c.State.fighters.Count==c.State.players.Sum(p=>p.units.Count)),
+            "Ordinary enemies must all be visible even beyond AI acquisition range on the clear courtyards fixture.");
+        Require(clients.All(c => c.State.fighters.All(f => f.slowMultiplier > 0 && f.slowMultiplier <= 1)),
+            "The authoritative movement slow multiplier did not survive TCP serialization.");
+        Require(clients.All(c=>c.State.fighters.All(f=>f.attackRevealRemaining>=0&&f.attackRevealRemaining<=2&&f.concealmentSources>=0&&f.concealmentSources<=7)),
+            "Concealment fields did not survive authoritative TCP serialization.");
+        Pass("battle snapshots expose ordinary armies while preserving concealed-enemy discovery and synchronized concealment and movement fields");
         Require(clients.All(c => c.State.fighters.Where(f => !f.neutral).All(f => f.attack > 0 && f.attackSpeed > 0 && f.range > 0 && f.speed > 0)),
             "Actual combat stats were not included in network snapshots.");
         Require(clients.All(c => c.State.fighters.Where(f => f.neutral).All(f => f.ownerId == "neutral" && f.slot == -1 && f.maxHp > 0) &&
@@ -447,15 +460,17 @@ sealed class NetworkCheck : IDisposable
     private void CheckNavigationAndTacticalPlacement()
     {
         var client=clients[0];var own=Own(client);var unit=own.units[0];
-        client.Send(new GameCommand{type="place",unitId=unit.id,x=0,y=300,placementId="tactics-drag"});
-        Wait(()=>Own(client).units.Any(u=>u.id==unit.id&&u.placementId=="tactics-drag"&&Math.Abs(u.y-300)<.01f),4000,"tactical placement acknowledgement");
+        var placement=ArenaGame.FormationToWorld(own,0,300);
+        client.Send(new GameCommand{type="place",unitId=unit.id,x=placement.x,y=placement.y,placementId="tactics-drag"});
+        Wait(()=>Own(client).units.Any(u=>u.id==unit.id&&u.placementId=="tactics-drag"&&Math.Abs(u.x-placement.x)<.01f&&Math.Abs(u.y-placement.y)<.01f),4000,"tactical placement acknowledgement");
         int errors=client.ErrorVersion;
-        client.Send(new GameCommand{type="place",unitId=Own(clients[1]).units[0].id,x=0,y=300,placementId="foreign-drag"});
+        client.Send(new GameCommand{type="place",unitId=Own(clients[1]).units[0].id,x=placement.x,y=placement.y,placementId="foreign-drag"});
         Wait(()=>client.ErrorVersion>errors,4000,"foreign tactical drag denied");
-        client.Send(new GameCommand{type="move_to",x=100,y=300});
-        Wait(()=>Own(client).steveNavigating||Math.Abs(Own(client).steve.x-100)<2,4000,"server navigation started");
-        Wait(()=>!Own(client).steveNavigating&&Math.Abs(Own(client).steve.x-100)<2&&Math.Abs(Own(client).steve.y-300)<2,5000,"server navigation completed");
-        Require(clients.All(c=>c.State.players.Single(p=>p.id==client.PlayerId).steve.x>98),"Navigation destination did not reach every client.");
+        var destination=ArenaGame.FormationToWorld(own,100,300);
+        client.Send(new GameCommand{type="move_to",x=destination.x,y=destination.y});
+        Wait(()=>Own(client).steveNavigating||Math.Abs(Own(client).steve.x-destination.x)<2,4000,"server navigation started");
+        Wait(()=>!Own(client).steveNavigating&&Math.Abs(Own(client).steve.x-destination.x)<2&&Math.Abs(Own(client).steve.y-destination.y)<2,5000,"server navigation completed");
+        Require(clients.All(c=>{var steve=c.State.players.Single(p=>p.id==client.PlayerId).steve;return Math.Abs(steve.x-destination.x)<2&&Math.Abs(steve.y-destination.y)<2;}),"Navigation destination did not reach every client.");
         Pass("real TCP tactical dragging protects ownership and click navigation completes on the authoritative server");
     }
 
@@ -484,7 +499,7 @@ sealed class NetworkCheck : IDisposable
         owner.Send(new GameCommand{type="tactics_set",unitIds=new[]{foreign},nodes=new[]{new TacticNode{action="wait",seconds=1}}});
         owner.Send(new GameCommand{type="tactics_set",unitIds=new[]{unitId,unitId},nodes=new[]{new TacticNode{action="wait",seconds=1}}});
         owner.Send(new GameCommand{type="tactics_set",unitIds=new[]{unitId},nodes=new[]{new TacticNode{action="telefrag"}}});
-        owner.Send(new GameCommand{type="tactics_set",unitIds=new[]{unitId},nodes=new[]{new TacticNode{x=411}}});
+        owner.Send(new GameCommand{type="tactics_set",unitIds=new[]{unitId},nodes=new[]{new TacticNode{x=BattlefieldCatalog.Extent(owner.State.battlefield)+1}}});
         owner.Send(new GameCommand{type="tactics_set",unitIds=new[]{unitId},nodes=new[]{new TacticNode{condition="unknown"}}});
         owner.Send(new GameCommand{type="tactics_set",unitIds=new[]{unitId},nodes=new[]{new TacticNode{action="capture",targetId="fake-objective"}}});
         owner.Send(new GameCommand{type="tactics_set",unitIds=new[]{unitId},nodes=Enumerable.Range(0,11).Select(_=>new TacticNode()).ToArray()});

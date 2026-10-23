@@ -139,10 +139,7 @@ namespace BlockArena.Runtime
             app.ShowBestiary = true;
             yield return new WaitForSecondsRealtime(.3f);
             yield return new WaitForEndOfFrame(); Capture("14-bestiary");
-            app.ShowBestiary = false; app.ShowHelp = true;
-            yield return new WaitForSecondsRealtime(.2f);
-            yield return new WaitForEndOfFrame(); Capture("15-help");
-            app.ShowHelp = false; app.Leave();
+            app.ShowBestiary = false; app.Leave();
             report.success = true; WriteReport();
             Debug.Log("ARENA_INTERFACE_OK " + report.checks.Count + " checks / " + report.captures.Count + " nonblack captures");
             Application.Quit(0);

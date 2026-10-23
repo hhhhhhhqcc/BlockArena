@@ -84,13 +84,14 @@ namespace BlockArena.Runtime
         {
             Metrics(); UpdateMarketPointer(); UpdateRoster();
             if(ShowSettings||app.QuickStarting)return true;
-            if (marketPointerOwned || marketDragging || releasedPointerFrame == Time.frameCount || audioPointerOwned || audioReleasedFrame == Time.frameCount || skillPointerOwned || skillReleasedFrame == Time.frameCount) return true;
+            if (inspectionPointerOwned || inspectionDragging || inspectionReleasedFrame == Time.frameCount || marketPointerOwned || marketDragging || releasedPointerFrame == Time.frameCount || audioPointerOwned || audioReleasedFrame == Time.frameCount || skillPointerOwned || skillReleasedFrame == Time.frameCount) return true;
             Vector2 p = new Vector2(screen.x / scale, (Screen.height - screen.y) / scale);
+            if (CommunicationCovers(p)) return true;
             if (BattlefieldHudCovers(p)) return true;
             if (AudioCovers(p)) return true;
             if (EconomyCovers(p)) return true;
             var state = app.State; var me = app.Me;
-            if (state == null || app.ShowGameMenu || app.ShowRoom || app.ShowHelp || app.ShowBestiary || state.phase == "lobby" || state.phase == "finished" ||
+            if (state == null || app.ShowGameMenu || app.ShowRoom || app.ShowBestiary || state.phase == "lobby" || state.phase == "finished" ||
                 RecruitVisible) return true;
             if (HeaderRect.Contains(p) || (CommandDockVisible&&CommandDockRect.Contains(p)) || RosterCovers(p) || PinnedInspectionCovers(p) || (RecruitPending&&!RecruitVisible&&RecruitRestoreRect.Contains(p))) return true;
             if (app.CanPrepare && (((app.Me.ready || state.phase == "recruit") && PrepareBannerRect.Contains(p)) || ReadyRect.Contains(p) || MarketToggleRect.Contains(p))) return true;
@@ -102,6 +103,7 @@ namespace BlockArena.Runtime
         public void SetHover(string titleText, string bodyText, Vector2 screenPosition)
         {
             if(!LayerAcceptsPointer())return;
+            hoveredObjective=null;
             commanderTooltip=false;
             ResetInspection();
             PrepareHover(titleText);
@@ -112,10 +114,11 @@ namespace BlockArena.Runtime
             hoverUntil = Time.unscaledTime + .15f;
         }
 
-        public void ClearHover() { hoverTitle = null; hoverBody = null; inspectionDefinition=null;commanderTooltip=false;hoverTooltipRect=Rect.zero; ResetInspection(); }
+        public void ClearHover() { hoverTitle = null; hoverBody = null; hoveredObjective=null;inspectionDefinition=null;commanderTooltip=false;hoverTooltipRect=Rect.zero; ResetInspection(); }
         public void SetInspection(CreatureDefinition definition,FighterState fighter,UnitState unit,PlayerState owner,Vector2 screenPosition)
         {
             if(definition==null){ClearHover();return;}
+            hoveredObjective=null;
             BeginInspection(definition,fighter,unit,owner);
             PrepareHover(fighter!=null?fighter.id:unit!=null?unit.id:definition.id);
             inspectionDefinition=definition;inspectionUnit=unit;inspectionOwner=owner;
@@ -138,7 +141,6 @@ namespace BlockArena.Runtime
                 DrawAudio();
                 if(app.State!=null&&app.ShowRoom){roomVisibleLastDraw=true;DrawModal(3,Room);}
                 if(app.ShowBestiary)DrawModal(5,Bestiary);
-                if(app.ShowHelp)DrawModal(6,Help);
             }else{
             if (app.State == null||app.QuickStarting) DrawModal(1,Menu);
             else
@@ -160,11 +162,11 @@ namespace BlockArena.Runtime
             if(app.ShowGameMenu)DrawModal(7,GameMenu);
             if(!app.QuickStarting&&app.State!=null&&(app.ShowRoom||app.State.phase=="lobby")&&!(app.State.phase=="lobby"&&app.ShowGameMenu&&!app.ShowRoom)){roomVisibleLastDraw=true;DrawModal(3,Room);}
             if(app.ShowBestiary) DrawModal(5,Bestiary);
-            if (app.ShowHelp) DrawModal(6,Help);
             DrawSkillPanels();
             DrawPinnedInspection();
             if (!AudioBlocksUnderlying) Hover();
             }
+            DrawCommunication();
             if (!string.IsNullOrEmpty(app.Notice))
             {
                 var r = NoticeRect;
@@ -312,7 +314,7 @@ namespace BlockArena.Runtime
             }
             GUI.EndScrollView();
             CreatureDefinition selected=CreatureCatalog.Get(bestiaryKind);Color color=MobColor(selected);
-            var abilityIds=selected.skills??new string[0];float contentHeight=407;
+            var abilityIds=selected.skills??new string[0];float contentHeight=479;
             foreach(string id in abilityIds)contentHeight+=77+small.CalcHeight(new GUIContent(ArenaDescription.Format(CreatureAbilities.Get(id).description)),596);
             detailScroll=BeginUiScroll(new Rect(x+350,y+84,738,588),detailScroll,new Rect(0,0,714,Mathf.Max(588,contentHeight)));
             RoundFill(new Rect(9,5,177,171),new Color(.025f,.06f,.075f),10);
@@ -324,11 +326,9 @@ namespace BlockArena.Runtime
             ArenaIcons.Draw(new Rect(211,125,25,25),"coin");Text(new Rect(250,123,110,31),selected.price.ToString(),label,gold);
             for(int i=0;i<Mathf.Min(6,selected.tier);i++)Fill(new Rect(390+i*17,132,10,10),gold);
             Text(new Rect(19,195,678,67),ArenaDescription.Format(selected.description),label,muted);
-            for(int i=0;i<4;i++)RoundFill(new Rect(10+i*174,266,166,53),new Color(.065f,.13f,.15f),7);
-            Rect[] stats={new Rect(19,277,144,32),new Rect(190,277,144,32),new Rect(360,277,144,32),new Rect(530,277,144,32)};
-            Stat(stats[0],"heart",ArenaDescription.Format(selected.hp.ToString("0.#")));Stat(stats[1],"sword",ArenaDescription.Format(selected.attack.ToString("0.#")));Stat(stats[2],"speed",ArenaDescription.Format(selected.attackSpeed.ToString("0.##")+"/秒"));Stat(stats[3],"range",ArenaDescription.Format(selected.range.ToString("0.#")));
-            Text(new Rect(20,324,665,45),"<color=#8DEACB>"+TagNames(selected.tags)+"</color>",small,mint);
-            float yy=404;Text(new Rect(19,yy-35,665,29),"天赋技能",label,gold);
+            BestiaryAttributes(selected);
+            Text(new Rect(20,396,665,45),"<color=#8DEACB>"+TagNames(selected.tags)+"</color>",small,mint);
+            float yy=476;Text(new Rect(19,yy-35,665,29),"天赋技能",label,gold);
             foreach(string id in abilityIds){
                 AbilityDefinition ability=CreatureAbilities.Get(id);string description=ArenaDescription.Format(ability.description);float h=small.CalcHeight(new GUIContent(description),596);
                 RoundFill(new Rect(17,yy,678,63+h),new Color(.075f,.14f,.16f,.95f),8);Fill(new Rect(17,yy+10,2,43+h),mint);
@@ -360,10 +360,11 @@ namespace BlockArena.Runtime
         void Hover()
         {
             hoverTooltipRect=Rect.zero;
-            if(Time.unscaledTime>hoverUntil||app.State==null||app.ShowGameMenu||app.ShowHelp||app.ShowBestiary||app.State.phase=="finished")return;
+            if(Time.unscaledTime>hoverUntil||app.State==null||app.ShowGameMenu||app.ShowBestiary||app.State.phase=="finished")return;
             if(RecruitVisible&&!(CommanderSelectable&&(CommanderRect.Contains(Mouse())||app.Tactics.SkillPickerOpen&&CommanderPickerRect.Contains(Mouse()))))return;
             hoverMotion.Step(1,23,.64f);
             if(inspectionDefinition!=null){Inspection();return;}
+            if(hoveredObjective!=null){ObjectiveInspection();return;}
             if(string.IsNullOrEmpty(hoverTitle))return;
             float panelWidth=368,innerWidth=328;
             float bodyHeight=small.CalcHeight(new GUIContent(hoverBody??""),innerWidth);

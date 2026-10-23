@@ -36,7 +36,7 @@ namespace BlockArena.Presentation
         bool TryPickVisibleBody(Vector2 screen,out VoxelCreature visual)
         {
             visual=null;if(viewCamera==null||state==null)return false;
-            Ray ray=viewCamera.ScreenPointToRay(screen);float nearest=180;
+            Ray ray=viewCamera.ScreenPointToRay(screen);float nearest=viewCamera.farClipPlane;
             PrepareSceneryPicking();RaycastHit sceneryHit;
             if(Physics.Raycast(ray,out sceneryHit,nearest,1<<SceneryPickLayer,QueryTriggerInteraction.Ignore))nearest=sceneryHit.distance+.012f;
             foreach(VoxelCreature view in creatures.Values){
@@ -61,13 +61,13 @@ namespace BlockArena.Presentation
             }
             return visual!=null;
         }
-        static bool RayTriangle(Ray ray,Vector3 a,Vector3 b,Vector3 c,out float distance)
+        static bool RayTriangle(Ray ray,Vector3 a,Vector3 b,Vector3 c,out float distance,float edgeTolerance=0)
         {
             distance=0;Vector3 edge=b-a,other=c-a,p=Vector3.Cross(ray.direction,other);float determinant=Vector3.Dot(edge,p);
             if(Mathf.Abs(determinant)<.0000001f)return false;
             float inverse=1/determinant;Vector3 offset=ray.origin-a;float u=Vector3.Dot(offset,p)*inverse;
-            if(u<0||u>1)return false;Vector3 q=Vector3.Cross(offset,edge);float v=Vector3.Dot(ray.direction,q)*inverse;
-            if(v<0||u+v>1)return false;distance=Vector3.Dot(other,q)*inverse;return distance>0;
+            if(u< -edgeTolerance||u>1+edgeTolerance)return false;Vector3 q=Vector3.Cross(offset,edge);float v=Vector3.Dot(ray.direction,q)*inverse;
+            if(v< -edgeTolerance||u+v>1+edgeTolerance)return false;distance=Vector3.Dot(other,q)*inverse;return distance>0;
         }
 
         // Opaque map meshes double as a retained native ray-query acceleration structure.
@@ -89,9 +89,26 @@ namespace BlockArena.Presentation
         public bool IsTacticalPointVisible(Vector3 point)
         {
             if(viewCamera==null)return false;
-            Vector3 screen=viewCamera.WorldToViewportPoint(point);
-            if(screen.z<viewCamera.nearClipPlane||screen.z>viewCamera.farClipPlane||screen.x<0||screen.x>1||screen.y<0||screen.y>1)return false;
-            Ray ray=viewCamera.ViewportPointToRay(screen);float distance=Vector3.Dot(point-ray.origin,ray.direction);
+            Vector3 screen=viewCamera.WorldToScreenPoint(point);
+            if(screen.z<viewCamera.nearClipPlane||screen.z>viewCamera.farClipPlane||screen.x<0||screen.x>Screen.width||screen.y<0||screen.y>Screen.height)return false;
+            // Match the actual pointer path. ViewportPointToRay followed a slightly
+            // different float round trip at a ridge silhouette and could classify
+            // an unclickable, tangent crease as an actionable ground point.
+            Ray ray=viewCamera.ScreenPointToRay(new Vector2(screen.x,screen.y));float distance=Vector3.Dot(point-ray.origin,ray.direction);
+            // PhysX can miss a ridge's shared triangle edge. Visibility must use
+            // the same retained walkable triangles as the actual ground click;
+            // otherwise a hidden far slope is reported as an actionable point.
+            Vector3 surface;
+            if(TryIntersectWalkableSurface(ray,out surface)){
+                float surfaceDistance=Vector3.Dot(surface-ray.origin,ray.direction);
+                if(surfaceDistance<distance-.025f)return false;
+                // A ray tangent to a steep corner can miss both adjoining faces
+                // after pixel rounding and correctly reach ground behind it. Only
+                // points on the walking surface need this reverse check; creature
+                // body centres and lifted route markers remain visible above it.
+                float walkingHeight=WorldSurfacePoint(point.x/WorldScale,point.z/WorldScale).y;
+                if(Mathf.Abs(point.y-walkingHeight)<.005f&&surfaceDistance>distance+.025f)return false;
+            }
             PrepareSceneryPicking();RaycastHit hit;
             return !Physics.Raycast(ray,out hit,Mathf.Max(0,distance-.025f),1<<SceneryPickLayer,QueryTriggerInteraction.Ignore);
         }
@@ -110,35 +127,73 @@ namespace BlockArena.Presentation
             return found;
         }
 
-        // Find the first ray / height-field crossing. Fixed-point horizontal-plane
-        // iteration oscillates at ramp edges, and cannot guarantee the nearest surface.
+        // Query the retained walkable triangles directly. A ray can just graze the
+        // crease between two slopes without crossing the sampled height field;
+        // marching then skips that visible surface and selects flat ground behind it.
+        // Trees, ruins and decorative inlays do not change the walking surface.
         bool TryIntersectWalkableSurface(Ray ray,out Vector3 point)
         {
             point=Vector3.zero;if(ray.direction.y>=-.00001f)return false;
-            float top=.06f;if(!solo&&fieldVisible&&fieldState!=null)
-                foreach(var terrain in fieldState.terrain)if(terrain.kind=="highland"||terrain.kind=="bridge")top=Mathf.Max(top,.06f+terrain.height*fieldRevealProgress);
-            // Enclose the height field on both sides. Ending exactly on the base
-            // plane can round GetPoint(end).y a few micrometres above 0.06 and
-            // leave a flat-ground ray without a negative side for bisection.
-            // This margin brackets the root; it does not relax the returned hit.
-            const float bracketPadding=.002f;
-            float start=Mathf.Max(0,(top+bracketPadding-ray.origin.y)/ray.direction.y),end=(.06f-bracketPadding-ray.origin.y)/ray.direction.y;
-            if(end<start)return false;
-            int steps=Mathf.Max(1,Mathf.CeilToInt((end-start)/.08f));float previous=start;
-            for(int i=1;i<=steps;i++){
-                float at=Mathf.Lerp(start,end,(float)i/steps);Vector3 sample=ray.GetPoint(at);
-                float height=.06f+(solo?0:BattlefieldVisualHeight(sample.x/WorldScale,sample.z/WorldScale));
-                if(sample.y<=height){
-                    float low=previous,high=at;
-                    for(int n=0;n<18;n++){
-                        float middle=(low+high)*.5f;Vector3 p=ray.GetPoint(middle);
-                        if(p.y>.06f+(solo?0:BattlefieldVisualHeight(p.x/WorldScale,p.z/WorldScale)))low=middle;else high=middle;
+            float nearest=(.06f-ray.origin.y)/ray.direction.y;
+            if(nearest<0)return false;
+            point=ray.GetPoint(nearest);
+            if(!solo&&fieldVisible&&fieldMap!=null&&fieldMap.root.gameObject.activeInHierarchy){
+                PrepareSceneryPicking();
+                foreach(var terrain in fieldMap.terrain){
+                    if(terrain.kind!="highland"&&terrain.kind!="bridge")continue;
+                    Transform top=terrain.root.Find("Walkable ramp and stone layers");
+                    if(top==null||!top.gameObject.activeInHierarchy)continue;
+                    MeshCollider collider=top.GetComponent<MeshCollider>();RaycastHit hit;
+                    if(collider==null||!collider.enabled)continue;
+                    if(collider.Raycast(ray,out hit,nearest+.001f)&&hit.distance<nearest){
+                        nearest=hit.distance;point=hit.point;
                     }
-                    point=ray.GetPoint((low+high)*.5f);return true;
+                    // Also check the original triangles when PhysX hits a farther
+                    // face after rejecting the nearer crease of the same mesh.
+                    float distance;
+                    if(TryPickRampTriangles(top,ray,nearest,out distance)){nearest=distance;point=ray.GetPoint(distance);}
                 }
-                previous=at;
             }
-            return false;
+            return true;
+        }
+        bool TryPickRampTriangles(Transform top,Ray ray,float maximum,out float nearest)
+        {
+            nearest=maximum;MeshFilter filter=top.GetComponent<MeshFilter>();
+            if(filter==null||filter.sharedMesh==null)return false;
+            Vector3 direction=top.InverseTransformVector(ray.direction);float factor=direction.magnitude;
+            if(factor<.000001f)return false;
+            Ray local=new Ray(top.InverseTransformPoint(ray.origin),direction);float entry;
+            if(!filter.sharedMesh.bounds.IntersectRay(local,out entry)||entry/factor>maximum)return false;
+            PickMesh mesh;
+            if(!pickMeshGeometry.TryGetValue(filter.sharedMesh,out mesh)){
+                mesh=new PickMesh{vertices=filter.sharedMesh.vertices,triangles=filter.sharedMesh.triangles};pickMeshGeometry.Add(filter.sharedMesh,mesh);
+            }
+            bool found=false;
+            for(int t=0;t<mesh.triangles.Length;t+=3){
+                float distance;
+                if(!RayRampTriangle(local,mesh.vertices[mesh.triangles[t]],mesh.vertices[mesh.triangles[t+1]],mesh.vertices[mesh.triangles[t+2]],out distance))continue;
+                distance/=factor;if(distance>=nearest)continue;nearest=distance;found=true;
+            }
+            return found;
+        }
+        static bool RayRampTriangle(Ray ray,Vector3 a,Vector3 b,Vector3 c,out float distance)
+        {
+            // Camera screen projection is float precision. Double intermediates
+            // and a 1e-4 barycentric edge margin retain shared creases without
+            // shifting the ray or enlarging a creature's selection silhouette.
+            distance=0;
+            double ex=(double)b.x-a.x,ey=(double)b.y-a.y,ez=(double)b.z-a.z;
+            double fx=(double)c.x-a.x,fy=(double)c.y-a.y,fz=(double)c.z-a.z;
+            double px=ray.direction.y*fz-ray.direction.z*fy,py=ray.direction.z*fx-ray.direction.x*fz,pz=ray.direction.x*fy-ray.direction.y*fx;
+            double determinant=ex*px+ey*py+ez*pz;if(System.Math.Abs(determinant)<1e-12)return false;
+            double ox=(double)ray.origin.x-a.x,oy=(double)ray.origin.y-a.y,oz=(double)ray.origin.z-a.z;
+            double u=(ox*px+oy*py+oz*pz)/determinant;
+            const double edge=1e-4;if(u< -edge||u>1+edge)return false;
+            double qx=oy*ez-oz*ey,qy=oz*ex-ox*ez,qz=ox*ey-oy*ex;
+            double v=(ray.direction.x*qx+ray.direction.y*qy+ray.direction.z*qz)/determinant;
+            if(v< -edge||u+v>1+edge)return false;
+            double at=(fx*qx+fy*qy+fz*qz)/determinant;
+            if(at<=0||at>float.MaxValue)return false;distance=(float)at;return true;
         }
     }
 }

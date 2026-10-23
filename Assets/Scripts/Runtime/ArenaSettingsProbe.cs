@@ -82,9 +82,7 @@ namespace BlockArena.Runtime
             Require(app.Hud.SettingsTabForVerification == 1, "display settings tab renders its own page");
             CheckSettings(); Capture("01-display-settings");
             app.Hud.SetSettingsTab(0); yield return Settle();
-            app.ShowHelp = true; yield return Settle();
-            app.HandleEscape();
-            Require(!app.ShowHelp && app.Hud.ShowSettings, "Escape closes settings help before the settings page");
+            Require(app.Hud.SettingsActionScreenRect("help")==Rect.zero, "removed help page has no settings entry");
             app.ShowBestiary = true; yield return Settle();
             app.HandleEscape();
             Require(!app.ShowBestiary && app.Hud.ShowSettings, "Escape closes the settings bestiary before the settings page");
@@ -260,7 +258,7 @@ namespace BlockArena.Runtime
                 "exactly one cached settings scene is active");
             Require(Fits(app.Hud.SettingsScreenRect), "settings page fits the actual native viewport");
             Require(Fits(app.Hud.SettingsTabScreenRect(0)) && Fits(app.Hud.SettingsTabScreenRect(1)), "both settings tab actions fit the viewport");
-            foreach (string action in new[] { "close", "windowed", "fullscreen", "resolution-prev", "resolution-next", "apply", "music", "effects", "mute", "commander-range", "creature-range", "bestiary", "help", "room" })
+            foreach (string action in new[] { "close", "windowed", "fullscreen", "resolution-prev", "resolution-next", "apply", "music", "effects", "mute", "commander-range", "creature-range", "bestiary", "room" })
             {
                 Rect rectangle = app.Hud.SettingsActionScreenRect(action);
                 // The room entry is only meaningful when a network session exists.

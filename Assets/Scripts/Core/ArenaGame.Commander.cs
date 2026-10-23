@@ -33,7 +33,7 @@ namespace BlockArena.Core
             if(p.eliminated||State.phase!="battle"||State.battlefield==null)Fail("仅能在战斗中释放指挥技");
             if(p.commanderUses<=0)Fail("本场指挥技次数已用完");
             if(p.commanderCooldown>0)Fail("指挥技冷却中");
-            if(!Finite(c.x)||!Finite(c.y)||Math.Abs(c.x)>410||Math.Abs(c.y)>410)Fail("指挥坐标无效");
+            if(!Finite(c.x)||!Finite(c.y)||Math.Abs(c.x)>BattlefieldEdge||Math.Abs(c.y)>BattlefieldEdge)Fail("指挥坐标无效");
             CommanderDefinition skill=BattlefieldCatalog.GetCommander(p.commanderSkill);
             FighterState target=null;
             float x=c.x,y=c.y;
@@ -116,7 +116,7 @@ namespace BlockArena.Core
                 p.steve=pending.destination;
                 for(int i=0;i<allies.Length;i++){
                     var f=allies[i];float a=i*2.094395f;
-                    var at=new Point2(Clamp(pending.destination.x+(float)Math.Cos(a)*24,-410,410),Clamp(pending.destination.y+(float)Math.Sin(a)*24,-410,410));
+                    var at=new Point2(Clamp(pending.destination.x+(float)Math.Cos(a)*24,-BattlefieldEdge,BattlefieldEdge),Clamp(pending.destination.y+(float)Math.Sin(a)*24,-BattlefieldEdge,BattlefieldEdge));
                     if(!BattlefieldCatalog.IsPassable(world,at.x,at.y,BattlefieldCatalog.Flying(f),Aquatic(f)))at=pending.destination;
                     Effect("teleport",f.x,f.y,f.slot,0,at.x,at.y,f,f);f.x=at.x;f.y=at.y;f.targetId=null;f.think=0;
                 }

@@ -57,11 +57,14 @@ namespace BlockArena.Presentation
     internal static class VoxelAssets
     {
         static Material lit,glow; static readonly Dictionary<string,Mesh> meshes=new Dictionary<string,Mesh>();
+        internal static int MeshBuildCount { get; private set; }
+        internal static double MeshBuildMilliseconds { get; private set; }
+        internal static string[] CachedMeshKeysForVerification { get {var keys=new string[meshes.Count];meshes.Keys.CopyTo(keys,0);return keys;} }
         public static Material Lit { get { Ensure();return lit; } }
         public static Material Glow { get { Ensure();return glow; } }
         static void Ensure(){if(lit!=null)return;Shader shader=Resources.Load<Shader>("ArenaVoxelLit");if(shader==null)shader=Shader.Find("Standard");lit=new Material(shader){name="Arena shared voxel material",enableInstancing=true};lit.SetFloat("_Glossiness",.1f);glow=new Material(lit){name="Arena ember material"};glow.SetFloat("_Glow",.65f);}
         public static Color Hex(string value){Color c;if(ColorUtility.TryParseHtmlString(value,out c))return c;return Color.white;}
-        public static Mesh Cached(string key,Action<VoxelMesh> make){Mesh m;if(meshes.TryGetValue(key,out m))return m;VoxelMesh b=new VoxelMesh();make(b);m=b.Finish(key);meshes.Add(key,m);return m;}
+        public static Mesh Cached(string key,Action<VoxelMesh> make){Mesh m;if(meshes.TryGetValue(key,out m))return m;long started=System.Diagnostics.Stopwatch.GetTimestamp();VoxelMesh b=new VoxelMesh();make(b);m=b.Finish(key);meshes.Add(key,m);MeshBuildCount++;MeshBuildMilliseconds+=(System.Diagnostics.Stopwatch.GetTimestamp()-started)*1000d/System.Diagnostics.Stopwatch.Frequency;return m;}
         public static Transform Part(Transform parent,string name,Mesh mesh,Vector3 position,Material material=null,bool shadow=true){GameObject g=new GameObject(name);g.transform.SetParent(parent,false);g.transform.localPosition=position;g.AddComponent<MeshFilter>().sharedMesh=mesh;MeshRenderer r=g.AddComponent<MeshRenderer>();r.sharedMaterial=material==null?Lit:material;r.shadowCastingMode=shadow?ShadowCastingMode.On:ShadowCastingMode.Off;r.receiveShadows=shadow;return g.transform;}
         public static Mesh Block(Color color){string key="block"+ColorUtility.ToHtmlStringRGB(color);return Cached(key,b=>b.Box(Vector3.zero,Vector3.one,color));}
         public static Mesh TeamRing(int slot){Color[] teams={Hex("#7FE2BE"),Hex("#EDBC72"),Hex("#B49AF0"),Hex("#F38E9C")};return Cached("ring"+slot,b=>b.Ring(.57f,.49f,teams[Mathf.Clamp(slot,0,3)]));}
@@ -89,9 +92,9 @@ namespace BlockArena.Presentation
         public static Mesh ImpactTint(Mesh source)
         {
             string key="commander-flash/"+source.name;Mesh mesh;if(meshes.TryGetValue(key,out mesh))return mesh;
-            mesh=UnityEngine.Object.Instantiate(source);mesh.name=key;Color[] colors=mesh.colors;
+            long started=System.Diagnostics.Stopwatch.GetTimestamp();mesh=UnityEngine.Object.Instantiate(source);mesh.name=key;Color[] colors=mesh.colors;
             for(int i=0;i<colors.Length;i++)colors[i]=Color.Lerp(colors[i],Hex("#FF696F"),.78f);
-            mesh.colors=colors;meshes.Add(key,mesh);return mesh;
+            mesh.colors=colors;meshes.Add(key,mesh);MeshBuildCount++;MeshBuildMilliseconds+=(System.Diagnostics.Stopwatch.GetTimestamp()-started)*1000d/System.Diagnostics.Stopwatch.Frequency;return mesh;
         }
     }
 
@@ -151,6 +154,7 @@ namespace BlockArena.Presentation
             selection = VoxelAssets.Part(transform, "Selection", VoxelAssets.SelectionRing(), new Vector3(0, .04f, 0), VoxelAssets.Glow, false);
             selection.gameObject.SetActive(false);
             BuildSkillFeedback();
+            BuildConcealmentFeedback();
             float footprint = Mathf.Clamp(modelFootprint / .57f, .6f, 2.8f);
             teamRing.localScale = new Vector3(footprint, 1, footprint);
             selection.localScale = new Vector3(footprint, 1, footprint);
@@ -557,6 +561,7 @@ namespace BlockArena.Presentation
             ResetExtraFeedback();
             ResetArenaEventFeedback();
             ResetCombatFeedback();
+            ResetConcealmentFeedback();
             SetCommanderFlash(false);
             teamRingMesh.sharedMesh = VoxelAssets.TeamRing(slot);
             healthRoot.gameObject.SetActive(false);
@@ -571,6 +576,7 @@ namespace BlockArena.Presentation
             SetSkillHighlighted(false);executionPlaying=false;
             SetCommanderFlash(false);
             ResetCombatFeedback();
+            ResetConcealmentFeedback();
             if (healthRoot != null) healthRoot.gameObject.SetActive(false);
         }
 
@@ -716,6 +722,7 @@ namespace BlockArena.Presentation
                 if (color != healthColor) { healthFillMesh.sharedMesh = color == 0 ? healthyMesh : color == 1 ? woundedMesh : criticalMesh; healthColor = color; }
             }
             StepArenaEventFeedback(time);
+            StepConcealmentFeedback(dt,camera);
         }
     }
 }

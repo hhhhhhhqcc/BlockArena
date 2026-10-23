@@ -132,7 +132,8 @@ namespace BlockArena.Presentation
             Point2 target=commandPreviewTarget.Value;
             CommanderDefinition skill=BattlefieldCatalog.GetCommander(commandPreviewSkill);
             float dx=target.x-from.x,dy=target.y-from.y;
-            bool valid=dx*dx+dy*dy<=200*200&&Mathf.Abs(target.x)<=410&&Mathf.Abs(target.y)<=410;
+            float edge=BattlefieldCatalog.Extent(state.battlefield);
+            bool valid=dx*dx+dy*dy<=200*200&&Mathf.Abs(target.x)<=edge&&Mathf.Abs(target.y)<=edge;
             if(skill.id=="rift"||skill.id=="trap"||skill.id=="decoy")valid&=BattlefieldCatalog.IsPassable(state.battlefield,target.x,target.y);
             Color area=VoxelAssets.Hex(valid?(skill.id=="rift"?"#CAADFF":skill.id=="focus"?"#FFB993":"#A2EDDE"):"#FA807D");
             area.a=.78f;

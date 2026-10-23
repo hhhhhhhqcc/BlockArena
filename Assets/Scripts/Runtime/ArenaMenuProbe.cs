@@ -58,7 +58,7 @@ namespace BlockArena.Runtime
             app = ArenaApp.Instance; app.VerificationInput = true; app.VerificationPointer = new Vector2(-200, -200);
             yield return Settle();
             CheckFrontend("main"); Require(Fits(app.Hud.FrontPanelScreenRect), "main menu fits viewport");
-            foreach (string action in new[] { "single", "host", "join", "bestiary", "settings", "help", "exit" })
+            foreach (string action in new[] { "single", "host", "join", "bestiary", "settings", "exit" })
                 Require(Inside(app.Hud.FrontPanelScreenRect, app.Hud.FrontActionScreenRect(action)), "main action " + action + " is visible");
             Color mainColour = BackgroundColour(); Capture("01-main-menu");
             int meshes = app.World.FrontendMeshObjectCount;
@@ -66,7 +66,7 @@ namespace BlockArena.Runtime
             app.Hud.ShowSettings = true; yield return Settle();
             CheckFrontend("settings");
             Require(Fits(app.Hud.SettingsScreenRect), "dedicated settings page fits viewport");
-            foreach (string action in new[] { "close", "music", "effects", "mute", "commander-range", "creature-range", "bestiary", "help", "room" })
+            foreach (string action in new[] { "close", "music", "effects", "mute", "commander-range", "creature-range", "bestiary", "room" })
                 Require(Inside(app.Hud.SettingsScreenRect, app.Hud.SettingsActionScreenRect(action)), "settings action " + action + " fits viewport");
             Capture("01-settings-sound-assistance");
             app.Hud.SetSettingsTab(1); yield return Settle();
@@ -100,7 +100,7 @@ namespace BlockArena.Runtime
             app.HandleEscape(); yield return Settle();
             Require(app.ShowGameMenu && app.BattlefieldInputBlocked, "Escape opens the game menu and blocks arena controls");
             Require(Fits(app.Hud.GameMenuScreenRect), "Escape menu fits viewport");
-            foreach (string action in new[] { "continue", "bestiary", "settings", "help", "room", "main", "exit" })
+            foreach (string action in new[] { "continue", "bestiary", "settings", "room", "main", "exit" })
                 Require(Inside(app.Hud.GameMenuScreenRect, app.Hud.GameMenuActionScreenRect(action)), "Escape action " + action + " is visible");
             Require(app.Hud.Contains(Vector2.zero), "Escape menu captures the entire arena input area");
             Require(Time.timeScale == 1, "networked game menu never pauses the simulation clock");
@@ -110,14 +110,7 @@ namespace BlockArena.Runtime
             Require(Distance(stopped, app.Me.steve) < 1, "opening menu stops server navigation and rejects further walk input");
             Require(app.State.timeLeft < remaining - .15f, "authoritative countdown keeps advancing behind menu");
             Capture("05-escape-menu");
-            app.ShowHelp = true;
-            for (int tab = 0; tab < 4; tab++)
-            {
-                app.Hud.SetHelpTab(tab); yield return Settle();
-                Require(Fits(app.Hud.HelpPanelScreenRect) && Inside(app.Hud.HelpPanelScreenRect, app.Hud.HelpTabScreenRect(tab)), "help tab " + tab + " fits viewport");
-                Capture("06-help-" + tab);
-            }
-            app.HandleEscape(); Require(!app.ShowHelp && app.ShowGameMenu, "Escape returns from help to game menu");
+            Require(app.Hud.FrontActionScreenRect("help")==Rect.zero && app.Hud.GameMenuActionScreenRect("help")==Rect.zero, "removed help page has no frontend or Escape entry");
             app.Hud.ShowSettings = true; yield return Settle();
             Require(Fits(app.Hud.AudioScreenRect), "settings opened from game menu fit viewport"); Capture("07-menu-settings");
             app.HandleEscape(); Require(!app.Hud.ShowSettings && app.ShowGameMenu, "Escape returns from settings to menu");

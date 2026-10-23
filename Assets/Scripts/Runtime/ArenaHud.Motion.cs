@@ -123,7 +123,7 @@ namespace BlockArena.Runtime
 
         public bool PointerCaptured
         {
-            get { Metrics(); UpdateMarketPointer(); return marketPointerOwned || marketDragging || releasedPointerFrame == Time.frameCount || audioPointerOwned || audioReleasedFrame == Time.frameCount || skillPointerOwned || skillReleasedFrame == Time.frameCount; }
+            get { Metrics(); UpdateMarketPointer(); return inspectionPointerOwned || inspectionDragging || inspectionReleasedFrame==Time.frameCount || marketPointerOwned || marketDragging || releasedPointerFrame == Time.frameCount || audioPointerOwned || audioReleasedFrame == Time.frameCount || skillPointerOwned || skillReleasedFrame == Time.frameCount; }
         }
         internal int CoinFeedbackCount { get { return feedbackCount; } }
         internal int ActiveCoinFeedbackCount
@@ -143,7 +143,7 @@ namespace BlockArena.Runtime
         }
         bool ModalOpen
         {
-            get { return ShowSettings || app.QuickStarting || app.ShowGameMenu || app.ShowRoom || app.ShowHelp || app.ShowBestiary || app.State == null || app.State.phase == "lobby" || app.State.phase == "finished" ||
+            get { return ShowSettings || app.QuickStarting || app.ShowGameMenu || app.ShowRoom || app.ShowBestiary || app.State == null || app.State.phase == "lobby" || app.State.phase == "finished" ||
                 RecruitVisible; }
         }
         bool MarketVisible { get { return app.CanPrepare && (app.ShowShop || marketMotion.value > .015f); } }
@@ -157,6 +157,7 @@ namespace BlockArena.Runtime
         void UpdateMarketPointer()
         {
             UpdateAudioPointer();
+            UpdateInspectionPointer();
             UpdateSkillPointer();
             if (pointerFrame == Time.frameCount) return;
             if (app.VerificationInput) return;
@@ -166,7 +167,7 @@ namespace BlockArena.Runtime
         {
             Metrics(); pointerFrame = Time.frameCount; EnsureMarketPosition();
             Vector2 p = new Vector2(screen.x / scale, (Screen.height - screen.y) / scale);
-            if (audioPointerOwned || skillPointerOwned || (pressed && (AudioCovers(p) || SkillUiCovers(p)))) return;
+            if (inspectionPointerOwned || inspectionDragging || inspectionReleasedFrame==Time.frameCount || audioPointerOwned || skillPointerOwned || (pressed && (AudioCovers(p) || PinnedInspectionCovers(p) || SkillUiCovers(p)))) return;
             if (!MarketVisible || ModalOpen) {
                 if (marketPointerOwned || marketDragging) releasedPointerFrame = Time.frameCount;
                 marketPointerOwned = marketDragging = false;

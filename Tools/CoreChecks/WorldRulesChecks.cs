@@ -189,18 +189,19 @@ internal static partial class Program
             game.State.battlefield.objectives.First(o=>o.kind=="tower").ownerId="a";
             Assert(game.SnapshotFor("a").fighters.Any(f=>f.id==b.id));
             game.State.battlefield.objectives.First(o=>o.kind=="tower").ownerId=null;
-            b.x=b.y=350;WorldTick(game);Assert(!b.hidden);Assert(!game.SnapshotFor("a").fighters.Any(f=>f.id==b.id));
+            a.x=a.y=0;b.x=b.y=350;WorldTick(game);Assert(!b.hidden);Assert(game.SnapshotFor("a").fighters.Any(f=>f.id==b.id));
+            Assert(!BattlefieldVision.CanSee(game.State.battlefield,a,b));
             game.State.battlefield.weather="clear";WorldTick(game);Assert(game.SnapshotFor("a").fighters.Any(f=>f.id==b.id));
         });
         Check("a defeated army immediately spectates the remaining battle instead of losing every enemy snapshot",()=>{
             var game=WorldBattle("bog","fog");var own=game.State.fighters[0];var enemy=game.State.fighters[1];
-            own.x=own.y=350;enemy.x=enemy.y=-350;
+            own.x=own.y=350;enemy.x=enemy.y=-350;enemy.hidden=true;
             var third=new PlayerState{id="c",name="丙",slot=2};game.State.players.Add(third);
             var survivor=ArenaGame.PreviewFighter(third,new UnitState{id="third",kind="skeleton",x=-300,y=-300});game.State.fighters.Add(survivor);
             Assert(!game.SnapshotFor("a").fighters.Any(f=>f.id==enemy.id));
             own.dead=true;own.hp=0;Assert(!game.State.players[0].eliminated);
             var snapshot=game.SnapshotFor("a");Assert(snapshot.fighters.Any(f=>f.id==enemy.id)&&snapshot.fighters.Any(f=>f.id==survivor.id));
-            // A still-living army retains fog restrictions.
+            // A still-living army retains concealed-enemy discovery restrictions.
             own.dead=false;own.hp=1;Assert(!game.SnapshotFor("a").fighters.Any(f=>f.id==enemy.id));
         });
         Check("solid cover has clearance, breaks open and flight crosses it without losing position",()=>{

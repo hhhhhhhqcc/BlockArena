@@ -28,7 +28,7 @@ namespace BlockArena.Core
             foreach(TacticNode node in command.nodes)
             {
                 if(node==null||!tacticActions.Contains(node.action??"")||!tacticConditions.Contains(node.condition??""))Fail("战术节点或条件无效");
-                if(!Finite(node.x)||!Finite(node.y)||Math.Abs(node.x)>410||Math.Abs(node.y)>410||
+                if(!Finite(node.x)||!Finite(node.y)||Math.Abs(node.x)>BattlefieldEdge||Math.Abs(node.y)>BattlefieldEdge||
                     !Finite(node.seconds)||node.seconds<0||node.seconds>20||!Finite(node.threshold)||node.threshold<0||node.threshold>250)Fail("战术坐标、等待时间或条件参数无效");
                 if(node.targetId!=null&&node.targetId.Length>80)Fail("战术目标标识过长");
                 if(node.action=="capture"&&!string.IsNullOrEmpty(node.targetId)&&
@@ -114,6 +114,7 @@ namespace BlockArena.Core
                     case "ambush":
                         advance=enemyNear||f.tacticWait>=Math.Max(.5f,node.seconds);
                         hold=!advance;
+                        if(!advance)f.concealmentSources|=4;
                         if(!advance&&State.battlefield!=null&&f.revealUntil<=State.battlefield.elapsed)f.hidden=true;
                         if(advance){f.hidden=false;f.revealUntil=(State.battlefield==null?0:State.battlefield.elapsed)+2;}
                         break;
@@ -137,6 +138,9 @@ namespace BlockArena.Core
         bool VisibleToPlayer(FighterState fighter,string viewerId)
         {
             if(fighter.ownerId==viewerId||State.phase!="battle"||State.battlefield==null)return true;
+            // Display visibility is separate from AI sight/range: only concealment
+            // needs discovery. Ordinary enemies and the entire map remain visible.
+            if(!fighter.hidden)return true;
             PlayerState viewer=State.players.Find(p=>p.id==viewerId);
             if(viewer==null||viewer.eliminated)return true;
             // A defeated army becomes a spectator for the remainder of this round.

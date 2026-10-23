@@ -18,9 +18,10 @@ namespace BlockArena.Core
         void InitializeBattlefieldCore(bool deferWeather)
         {
             string map=string.IsNullOrEmpty(State.preferredMap)?BattlefieldCatalog.Maps[random.Next(BattlefieldCatalog.Maps.Length)]:State.preferredMap;
-            State.battlefield=BattlefieldCatalog.Create(map,"clear",random.Next());
+            State.battlefield=BattlefieldCatalog.CreateExpanded(map,"clear",random.Next());
             if(!deferWeather)SelectBattlefieldWeather();
-            foreach(var p in State.players)p.steve=BattlefieldSafePoint(p.steve,false,false,9);
+            DeployExpandedFormations();
+            foreach(var p in Living())p.steve=BattlefieldSafePoint(p.steve,false,false,9);
             battlefieldGold.Clear();objectiveRewards.Clear();battlefieldRangedHits.Clear();pendingRifts.Clear();
             nextStormAt=10;nextLavaAt=8;
         }
@@ -89,14 +90,16 @@ namespace BlockArena.Core
                     if(aquatic)f.speed*=1.15f;else{f.speed*=.8f;f.attackSpeed*=.9f;}
                 }
                 if(!flying&&BattlefieldCatalog.HeightAt(world,f.x,f.y)>.35f&&ranged)f.range*=1.15f;
-                f.hidden=!f.neutral&&world.elapsed>=f.revealUntil&&
-                    TerrainAt("forest",f.x,f.y)!=null;
+                f.concealmentSources=!f.neutral&&TerrainAt("forest",f.x,f.y)!=null?1:0;
+                f.attackRevealRemaining=Math.Max(0,f.attackRevealUntil-world.elapsed);
+                f.hidden=!f.neutral&&world.elapsed>=f.revealUntil&&f.concealmentSources!=0;
                 foreach(var zone in world.zones){
                     if(zone.ownerId!=f.ownerId||Distance(f.x,f.y,zone.x,zone.y)>zone.radius)continue;
                     if(zone.kind=="drums"){f.attackSpeed*=1.2f;f.speed*=1.1f;f.commandHaste=.2f;}
                     else if(zone.kind=="ward")f.commandGuard=Math.Max(f.commandGuard,.2f);
                     else if(zone.kind=="smoke"){
                         f.speed*=1.3f;
+                        f.concealmentSources|=2;
                         if(world.elapsed>=f.revealUntil)f.hidden=true;
                     }
                 }
@@ -224,14 +227,7 @@ namespace BlockArena.Core
         }
         bool CanBattlefieldTarget(FighterState source,FighterState target)
         {
-            var world=State.battlefield;if(world==null)return true;
-            float distance=Distance(source,target);
-            bool scout=BattlefieldCatalog.Scout(source)||TowerOwned(source.ownerId);
-            float vision=world.weather=="fog"?385:world.weather=="sandstorm"?440:float.PositiveInfinity;
-            if(scout)vision*=1.3f;
-            if(distance>vision)return false;
-            if(target.hidden&&!scout&&distance>(world.weather=="fog"?65:100))return false;
-            return true;
+            return BattlefieldVision.CanSee(State.battlefield,source,target);
         }
         FighterState PreferredCommanderTarget(FighterState source)
         {
@@ -281,7 +277,7 @@ namespace BlockArena.Core
         void EnsureBattlefieldRoutes()
         {
             string map=State.battlefield.mapId;
-            string topology=map+":"+string.Join(",",State.battlefield.terrain.Where(t=>t.kind=="ruins"&&t.hp>0||t.kind=="water"&&t.freeze>=1).Select(t=>t.id));
+            string topology=map+":"+BattlefieldCatalog.Scale(State.battlefield)+":"+string.Join(",",State.battlefield.terrain.Where(t=>t.kind=="ruins"&&t.hp>0||t.kind=="water"&&t.freeze>=1).Select(t=>t.id));
             if(routeMap==topology&&routeDistances!=null)return;
             routeMap=topology;routeNodes.Clear();
             if(map=="courtyards"){
@@ -292,6 +288,23 @@ namespace BlockArena.Core
             }else{
                 foreach(float x in new[]{-325f,0,325f}){routeNodes.Add(new Point2(x,85));routeNodes.Add(new Point2(x,-85));}
                 routeNodes.Add(new Point2(-325,0));routeNodes.Add(new Point2(325,0));
+            }
+            float scale=BattlefieldCatalog.Scale(State.battlefield);
+            for(int i=0;i<routeNodes.Count;i++)routeNodes[i]=new Point2(routeNodes[i].x*scale,routeNodes[i].y*scale);
+            // River bends are real terrain. Route through each designed crossing or
+            // around the ends, rather than pretending every river is an axis-aligned strip.
+            foreach(var river in State.battlefield.terrain.Where(t=>t.shape=="river"&&t.kind=="water"&&t.freeze<1)){
+                foreach(int sign in new[]{-1,1}){
+                    float along=sign*(river.halfWidth+32);
+                    foreach(int bank in new[]{-1,1})routeNodes.Add(BattlefieldCatalog.TerrainPoint(river,along,bank*(river.halfHeight+river.radius+35)));
+                }
+                foreach(var bridge in State.battlefield.terrain.Where(t=>t.kind=="bridge")){
+                    bool vertical=bridge.halfHeight>=bridge.halfWidth;
+                    foreach(int sign in new[]{-1,1}){
+                        var point=new Point2(bridge.x+(vertical?0:sign*(bridge.halfWidth+20)),bridge.y+(vertical?sign*(bridge.halfHeight+20):0));
+                        if(BattlefieldCatalog.IsPassable(State.battlefield,point.x,point.y,false,false,10))routeNodes.Add(point);
+                    }
+                }
             }
             foreach(var ruin in State.battlefield.terrain.Where(t=>t.kind=="ruins"&&t.hp>0)){
                 float width=ruin.halfWidth*.72f+16,depth=ruin.halfHeight*.72f+16;
@@ -319,10 +332,10 @@ namespace BlockArena.Core
         }
         Point2 BattlefieldSafePoint(Point2 point,bool flying=false,bool aquatic=false,float clearance=0)
         {
-            float edge=410-clearance;
+            float edge=BattlefieldEdge-clearance;
             point.x=Finite(point.x)?Clamp(point.x,-edge,edge):0;point.y=Finite(point.y)?Clamp(point.y,-edge,edge):0;
             if(BattlefieldCatalog.IsPassable(State.battlefield,point.x,point.y,flying,aquatic,clearance))return point;
-            for(float radius=5;radius<=800;radius+=5)for(int i=0;i<32;i++){
+            for(float radius=5;radius<=BattlefieldEdge*2;radius+=5)for(int i=0;i<32;i++){
                 double angle=i*Math.PI/16;
                 var candidate=new Point2(point.x+(float)Math.Cos(angle)*radius,point.y+(float)Math.Sin(angle)*radius);
                 if(BattlefieldCatalog.IsPassable(State.battlefield,candidate.x,candidate.y,flying,aquatic,clearance))return candidate;
@@ -332,7 +345,7 @@ namespace BlockArena.Core
         Point2 MoveOnBattlefield(FighterState f,Point2 desired)
         {
             var world=State.battlefield;bool flying=BattlefieldCatalog.Flying(f);
-            desired.x=Clamp(desired.x,-410,410);desired.y=Clamp(desired.y,-410,410);
+            desired.x=Clamp(desired.x,-BattlefieldEdge,BattlefieldEdge);desired.y=Clamp(desired.y,-BattlefieldEdge,BattlefieldEdge);
             if(world==null||flying)return desired;
             float oldHeight=BattlefieldCatalog.HeightAt(world,f.x,f.y),newHeight=BattlefieldCatalog.HeightAt(world,desired.x,desired.y);
             if(f.baseRange<=70&&newHeight>oldHeight+.001f){desired.x=f.x+(desired.x-f.x)*.9f;desired.y=f.y+(desired.y-f.y)*.9f;}
@@ -360,8 +373,8 @@ namespace BlockArena.Core
         BattlefieldState CopyBattlefield(BattlefieldState source,string viewerId)
         {
             if(source==null)return null;
-            var copy=new BattlefieldState{mapId=source.mapId,weather=source.weather,seed=source.seed,elapsed=source.elapsed,revealAge=source.revealAge};
-            foreach(var t in source.terrain)copy.terrain.Add(new TerrainState{id=t.id,kind=t.kind,x=t.x,y=t.y,radius=t.radius,halfWidth=t.halfWidth,halfHeight=t.halfHeight,height=t.height,hp=t.hp,maxHp=t.maxHp,burnTime=t.burnTime,freeze=t.freeze});
+            var copy=new BattlefieldState{mapId=source.mapId,weather=source.weather,seed=source.seed,scale=source.scale,halfExtent=source.halfExtent,elapsed=source.elapsed,revealAge=source.revealAge};
+            foreach(var t in source.terrain)copy.terrain.Add(new TerrainState{id=t.id,kind=t.kind,shape=t.shape,rotation=t.rotation,x=t.x,y=t.y,radius=t.radius,halfWidth=t.halfWidth,halfHeight=t.halfHeight,height=t.height,hp=t.hp,maxHp=t.maxHp,burnTime=t.burnTime,freeze=t.freeze});
             foreach(var o in source.objectives)copy.objectives.Add(new ObjectiveState{id=o.id,kind=o.kind,name=o.name,ownerId=o.ownerId,contenderId=o.contenderId,x=o.x,y=o.y,radius=o.radius,capture=o.capture,reward=o.reward,slot=o.slot,claimed=o.claimed});
             foreach(var h in source.hazards){
                 if(h.kind=="trap"&&!h.triggered&&h.ownerId!=viewerId){
@@ -370,7 +383,14 @@ namespace BlockArena.Core
                 }
                 copy.hazards.Add(new HazardState{id=h.id,kind=h.kind,ownerId=h.ownerId,x=h.x,y=h.y,radius=h.radius,delay=h.delay,remaining=h.remaining,triggered=h.triggered});
             }
-            foreach(var z in source.zones)copy.zones.Add(new CommandZoneState{id=z.id,kind=z.kind,ownerId=z.ownerId,targetId=z.targetId,slot=z.slot,x=z.x,y=z.y,radius=z.radius,remaining=z.remaining});
+            foreach(var z in source.zones){
+                // A tracking mark must not reveal the position of a concealed enemy.
+                if(z.kind=="focus"&&z.targetId!=null){
+                    FighterState marked=State.fighters.Find(f=>f.id==z.targetId);
+                    if(marked!=null&&!VisibleToPlayer(marked,viewerId))continue;
+                }
+                copy.zones.Add(new CommandZoneState{id=z.id,kind=z.kind,ownerId=z.ownerId,targetId=z.targetId,slot=z.slot,x=z.x,y=z.y,radius=z.radius,remaining=z.remaining});
+            }
             return copy;
         }
     }

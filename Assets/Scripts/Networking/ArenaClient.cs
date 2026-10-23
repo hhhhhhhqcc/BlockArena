@@ -24,6 +24,10 @@ namespace BlockArena.Networking
         private FramedConnection wire;
         private int attempt, connecting, disposed;
         private bool welcomed;
+        private readonly List<ChatMessage> chats = new List<ChatMessage>();
+        private readonly IList<ChatMessage> readOnlyChats;
+        private readonly Queue<VoiceFrame> voiceFrames = new Queue<VoiceFrame>();
+        private int voiceSequence;
         private string pendingName, pendingToken;
         private double helloAt, lastPacketAt;
 
@@ -35,8 +39,13 @@ namespace BlockArena.Networking
         public string RejectedPlacementId { get; private set; }
         public bool Connected { get { return welcomed && wire != null && wire.IsOpen; } }
         public bool Connecting { get { return Volatile.Read(ref connecting) != 0; } }
+        public IList<ChatMessage> ChatHistory { get { return readOnlyChats; } }
 
-        public ArenaClient(IWireCodec codec) { this.codec = codec ?? throw new ArgumentNullException(nameof(codec)); }
+        public ArenaClient(IWireCodec codec)
+        {
+            this.codec = codec ?? throw new ArgumentNullException(nameof(codec));
+            readOnlyChats = chats.AsReadOnly();
+        }
 
         public void Connect(string host, int port, string name, string resumeToken = null)
         {
@@ -52,6 +61,7 @@ namespace BlockArena.Networking
             }
             if (wire != null) { wire.Dispose(); wire = null; }
             welcomed = false;
+            chats.Clear(); voiceFrames.Clear(); voiceSequence = 0;
             Error = null;
             RejectedPlacementId = null;
             rejectedPlacements.Clear();
@@ -142,6 +152,17 @@ namespace BlockArena.Networking
                     welcomed = true; Volatile.Write(ref connecting, 0); Error = null;
                 }
                 else if (packet.type == "state" && welcomed && packet.state != null) State = packet.state;
+                else if (packet.type == "chat" && welcomed && packet.chat != null && !string.IsNullOrEmpty(packet.chat.playerId) && packet.chat.text != null && packet.chat.text.Length <= WireProtocol.ChatMaxCharacters)
+                {
+                    if (chats.Count == WireProtocol.ChatHistoryLimit) chats.RemoveAt(0);
+                    chats.Add(packet.chat);
+                }
+                else if (packet.type == "voice" && welcomed && packet.voice != null && packet.voice.playerId != PlayerId &&
+                    !string.IsNullOrEmpty(packet.voice.playerId) && packet.voice.pcm != null && packet.voice.pcm.Length == WireProtocol.VoiceBase64Length)
+                {
+                    while (voiceFrames.Count >= WireProtocol.VoiceReceiveLimit) voiceFrames.Dequeue();
+                    voiceFrames.Enqueue(packet.voice);
+                }
                 else if (packet.type == "error")
                 {
                     Error = string.IsNullOrEmpty(packet.message) ? "服务器拒绝了这次操作。" : packet.message;
@@ -156,6 +177,7 @@ namespace BlockArena.Networking
             if (!wire.IsOpen)
             {
                 welcomed = false; Volatile.Write(ref connecting, 0);
+                voiceFrames.Clear();
                 if (string.IsNullOrEmpty(Error)) Error = string.IsNullOrEmpty(wire.Error) ? "连接已断开，可以重新连接恢复对局。" : wire.Error;
                 wire.Dispose(); wire = null;
             }
@@ -173,6 +195,32 @@ namespace BlockArena.Networking
             if (command == null) { Error = "操作不能为空。"; return; }
             Error = null;
             SendPacket(new WirePacket { type = "action", command = command });
+        }
+
+        public void SendChat(string text)
+        {
+            if (!Connected || string.IsNullOrWhiteSpace(text)) return;
+            if (text.Length > WireProtocol.ChatMaxCharacters)
+            {
+                int length = WireProtocol.ChatMaxCharacters;
+                if (char.IsHighSurrogate(text[length - 1])) length--;
+                text = text.Substring(0, length);
+            }
+            SendPacket(new WirePacket { type = "chat", message = text });
+        }
+
+        public bool SendVoice(byte[] pcm)
+        {
+            if (!Connected || pcm == null || pcm.Length != WireProtocol.VoiceBytesPerFrame) return false;
+            var frame = new VoiceFrame { sequence = voiceSequence++, pcm = Convert.ToBase64String(pcm) };
+            try { return wire.TrySend(codec.Encode(new WirePacket { type = "voice", voice = frame }), false, true); }
+            catch (Exception) { return false; }
+        }
+
+        public bool TryDequeueVoice(out VoiceFrame frame)
+        {
+            if (voiceFrames.Count > 0) { frame = voiceFrames.Dequeue(); return true; }
+            frame = null; return false;
         }
 
         private void SendPacket(WirePacket packet)
@@ -194,6 +242,7 @@ namespace BlockArena.Networking
             if (Interlocked.Exchange(ref disposed, 1) != 0) return;
             Interlocked.Increment(ref attempt);
             Volatile.Write(ref connecting, 0); welcomed = false;
+            voiceFrames.Clear(); chats.Clear();
             lock (connectGate) { if (connectingSocket != null) { connectingSocket.Close(); connectingSocket = null; } }
             if (wire != null) { wire.Dispose(); wire = null; }
             ConnectResult result;

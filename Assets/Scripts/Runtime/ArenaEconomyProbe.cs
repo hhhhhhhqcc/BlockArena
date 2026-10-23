@@ -24,7 +24,7 @@ namespace BlockArena.Runtime
             for(int i=0;i+1<args.Length;i++)if(args[i]=="-capture-dir")folder=args[i+1];
             Directory.CreateDirectory(folder);ArenaApp app=ArenaApp.Instance;app.VerificationInput=true;
             app.VerificationPointer=new Vector2(-200,-200);yield return new WaitForSecondsRealtime(1.5f);
-            if(WireProtocol.Version!=7){Fail("native player did not use protocol v7");yield break;}
+            if(WireProtocol.Version!=11){Fail("native player did not use protocol v11");yield break;}
             app.Host(true);float deadline=Time.unscaledTime+18;
             while((app.State==null||app.State.phase!="recruit")&&Time.unscaledTime<deadline)yield return null;
             if(app.State==null||app.State.phase!="recruit"||app.Me==null){Fail("native recruitment handshake failed: "+app.Status);yield break;}
@@ -89,7 +89,7 @@ namespace BlockArena.Runtime
             if(app.State.roundEvent!=null||app.World.ActiveNeutralEventCount!=0||app.World.GoldResourceVisible||app.Hud.EventPreviewVisible||app.World.FieldObjectiveCount==0)
             {Fail("map reveal introduced an old neutral event or omitted its native objectives");yield break;}
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"05-native-map-objectives.png"));yield return new WaitForSecondsRealtime(.2f);
-            Debug.Log("ARENA_ECONOMY_OK protocol7 / real TCP refresh revision and cost / stale choice rejection / foreign dismissal rejection / recruit hide and restore / actual creature click pins protected stats and dismissal layout / zero-refund starter dismissal / final creature retained / skip / natural map objectives without central guard event / captures5");
+            Debug.Log("ARENA_ECONOMY_OK protocol10 / real TCP refresh revision and cost / stale choice rejection / foreign dismissal rejection / recruit hide and restore / actual creature click pins protected stats and dismissal layout / zero-refund starter dismissal / final creature retained / skip / natural map objectives without central guard event / captures5");
             if(Array.IndexOf(args,"-smoke-exit")>=0)Application.Quit(0);
             else{app.Leave();app.VerificationInput=false;app.VerificationPointer=null;Destroy(gameObject);}
         }

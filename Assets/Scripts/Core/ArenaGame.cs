@@ -9,7 +9,7 @@ namespace BlockArena.Core
     /// <summary>Dependency-free authoritative rules, shared by the host and rule checks.</summary>
     public sealed partial class ArenaGame
     {
-        public const float PrepSeconds = 45f, RecruitSeconds = PrepSeconds, BattleSeconds = 55f, ResultsSeconds = 6f;
+        public const float PrepSeconds = 45f, RecruitSeconds = PrepSeconds, BattleSeconds = 120f, ResultsSeconds = 6f;
         public GameState State { get; private set; }
         public int Seed { get; private set; }
         private readonly Random random;
@@ -102,7 +102,7 @@ namespace BlockArena.Core
             if(type=="move_to")
             {
                 if(State.phase!="prep"&&State.phase!="recruit"&&State.phase!="tactics"&&State.phase!="battle")Fail("当前阶段不能移动");
-                if(!Finite(command.x)||!Finite(command.y)||Math.Abs(command.x)>410||Math.Abs(command.y)>410)Fail("移动目的地无效");
+                if(!Finite(command.x)||!Finite(command.y)||Math.Abs(command.x)>BattlefieldEdge||Math.Abs(command.y)>BattlefieldEdge)Fail("移动目的地无效");
                 Point2 destination=new Point2(command.x,command.y);
                 if(State.phase=="prep"||State.phase=="recruit"){
                     Point2 moveLocal=WorldToLocal(p.slot,destination.x,destination.y);
@@ -147,7 +147,7 @@ namespace BlockArena.Core
             UnitState unit = p.units.Find(u => u.id == command.unitId);
             if (unit == null) Fail("只能操作自己拥有的生物");
             if (!Finite(command.x) || !Finite(command.y)) Fail("放置坐标无效");
-            Point2 local = WorldToLocal(p.slot, command.x, command.y);
+            Point2 local = WorldToFormation(p, command.x, command.y);
             if (local.x < -185.001f || local.x > 185.001f || local.y < 174.999f || local.y > 355.001f) Fail("请将生物放在自己的布阵区域内");
             if(State.phase=="tactics"){
                 var creature=CreatureCatalog.Get(unit.kind);
@@ -170,7 +170,7 @@ namespace BlockArena.Core
                 if(p.steveNavigating){TickSteveNavigation(p,dt);continue;}
                 if (p.moveUntil < clock) continue;
                 if(State.phase=="battle"||State.phase=="tactics"){
-                    Point2 at=new Point2(Clamp(p.steve.x+p.moveX*dt*130,-410,410),Clamp(p.steve.y+p.moveY*dt*130,-410,410));
+                    Point2 at=new Point2(Clamp(p.steve.x+p.moveX*dt*130,-BattlefieldEdge,BattlefieldEdge),Clamp(p.steve.y+p.moveY*dt*130,-BattlefieldEdge,BattlefieldEdge));
                     if(BattlefieldCatalog.IsPassable(State.battlefield,at.x,at.y,false,false,9))p.steve=at;
                     else if(BattlefieldCatalog.IsPassable(State.battlefield,at.x,p.steve.y,false,false,9))p.steve=new Point2(at.x,p.steve.y);
                     else if(BattlefieldCatalog.IsPassable(State.battlefield,p.steve.x,at.y,false,false,9))p.steve=new Point2(p.steve.x,at.y);
@@ -338,7 +338,7 @@ namespace BlockArena.Core
                 player.shop=new string[0];player.recruitChoice=player.recruitOfferId=null;
                 player.units.Clear();player.tactics.Clear();player.market.Clear();player.upgrades.Clear();
                 player.commanderUses=2;player.commanderCooldown=0;player.moveUntil=0;player.steveNavigating=false;
-                player.steve=LocalToWorld(player.slot,0,390);
+                RestorePreparation(player);player.steve=LocalToWorld(player.slot,0,390);
             }
             State.phase="lobby";State.round=0;State.timeLeft=0;State.winnerId=State.leaderId=null;
             State.roundEvent=null;State.battlefield=null;State.revealStage=null;State.revealStageAge=0;
@@ -355,7 +355,7 @@ namespace BlockArena.Core
             {
                 p.ready = false; p.moveUntil = 0;p.steveNavigating=false; p.recruitChoice = null; p.recruitPending = !p.eliminated;
                 p.tactics.Clear();p.commanderUses=2;p.commanderCooldown=0;
-                p.steve = LocalToWorld(p.slot, 0, 390);
+                RestorePreparation(p);p.steve = LocalToWorld(p.slot, 0, 390);
                 if (p.eliminated) { p.units.Clear();p.shop = new string[0]; p.recruitOfferId = null; p.market.Clear(); continue; }
                 if (first)
                 {
@@ -472,7 +472,7 @@ namespace BlockArena.Core
             for (int i = 0; i < Math.Min(3, count); i++)
             {
                 bool mini = kind == source.kind && (kind == "slime" || kind == "magma_cube");
-                var unit = new UnitState { id = source.unitId, kind = kind, x = Clamp(source.x + (i - (count - 1) * .5f) * 24, -410, 410), y = source.y };
+                var unit = new UnitState { id = source.unitId, kind = kind, x = Clamp(source.x + (i - (count - 1) * .5f) * 24, -BattlefieldEdge, BattlefieldEdge), y = source.y };
                 FighterState child = NewFighter(p, unit, mini); child.summoned = true;
                 if (!mini) { child.scale *= .8f; child.hp = child.maxHp *= .65f; }
                 CacheBattlefieldStats(child);NormalizeBattlefieldPosition(child);
@@ -556,9 +556,12 @@ namespace BlockArena.Core
         }
         private void Attack(FighterState f, FighterState target)
         {
-            f.hidden=false;if(State.battlefield!=null)f.revealUntil=State.battlefield.elapsed+2;
+            f.hidden=false;if(State.battlefield!=null){
+                f.revealUntil=State.battlefield.elapsed+2;
+                f.attackRevealUntil=f.revealUntil;f.attackRevealRemaining=2;
+            }
             f.attackCooldown = 1 / f.attackSpeed; f.attackTime = .24f;
-            CreatureAbilities.Attack(f, target, State.fighters, Damage, AbilityEffect, Summon);
+            CreatureAbilities.Attack(f, target, State.fighters, Damage, AbilityEffect, Summon, BattlefieldEdge);
             if(State.battlefield!=null)foreach(var displaced in State.fighters)NormalizeBattlefieldPosition(displaced);
         }
         private void CombatTick(float dt)
@@ -573,7 +576,7 @@ namespace BlockArena.Core
                 if (f.dead) continue;
                 f.attackTime = Math.Max(0, f.attackTime - dt); f.attackCooldown = Math.Max(0, f.attackCooldown - dt); f.think -= dt;
                 // The gold resource has no spawn bonuses or attacks, but existing poison/burn still expire and deal damage.
-                CreatureAbilities.Tick(f, State.fighters, dt, Damage, AbilityEffect);
+                CreatureAbilities.Tick(f, State.fighters, dt, Damage, AbilityEffect, BattlefieldEdge);
                 NormalizeBattlefieldPosition(f);
                 if (f.dead || f.stunTime > 0 || f.isDecoy) continue;
                 if (f.neutral && f.attack <= 0) continue;
@@ -599,7 +602,7 @@ namespace BlockArena.Core
                 }
                 float velocity = (float)Math.Sqrt(vx * vx + vy * vy), limit = f.speed * 1.3f * f.slowMultiplier;
                 if (velocity > limit) { vx *= limit / velocity; vy *= limit / velocity; }
-                Point2 moved=MoveOnBattlefield(f,new Point2(Clamp(f.x+vx*dt,-410,410),Clamp(f.y+vy*dt,-410,410)));
+                Point2 moved=MoveOnBattlefield(f,new Point2(Clamp(f.x+vx*dt,-BattlefieldEdge,BattlefieldEdge),Clamp(f.y+vy*dt,-BattlefieldEdge,BattlefieldEdge)));
                 f.x=moved.x;f.y=moved.y;
             }
             HashSet<string> alive = new HashSet<string>(State.fighters.Where(f => !f.dead && !f.neutral && participants.Contains(f.ownerId)).Select(f => f.ownerId));
@@ -668,6 +671,7 @@ namespace BlockArena.Core
             {
                 PlayerState player = new PlayerState { id = p.id, name = p.name, slot = p.slot, hp = p.hp, ready = p.ready, bot = p.bot, connected = p.connected,
                     eliminated = p.eliminated, recruitPending = p.recruitPending, recruitChoice = p.recruitChoice, steve = p.steve,steveDestination=p.steveDestination,steveNavigating=p.steveNavigating,
+                    deployed=p.deployed,deploymentSide=p.deploymentSide,deploymentOffset=p.deploymentOffset,
                     gold = p.gold, roundKills = p.roundKills, totalKills = p.totalKills, lastIncome = p.lastIncome, killIncome = p.killIncome,
                     rankIncome = p.rankIncome, baseIncome = p.baseIncome, lastRank = p.lastRank, shopRefreshLeft = p.id == playerId ? p.shopRefreshLeft : 0,
                     bountyKills = p.bountyKills, bountyIncome = p.bountyIncome, eventIncome = p.eventIncome,
@@ -684,7 +688,9 @@ namespace BlockArena.Core
                 x = f.x, y = f.y, hp = f.hp, maxHp = f.maxHp, scale = f.scale, attackTime = f.attackTime, dead = f.dead, neutral = f.neutral,
                 attack = f.attack, attackSpeed = f.attackSpeed, range = f.range, speed = f.speed,
                 skills = (string[])f.skills.Clone(), armor = f.armor, shield = f.shield,
-                poisonTime = f.poisonTime, burnTime = f.burnTime, slowTime = f.slowTime, stunTime = f.stunTime, summoned = f.summoned,hidden=f.hidden,rootTime=f.rootTime,resistanceTime=f.resistanceTime });}
+                poisonTime = f.poisonTime, burnTime = f.burnTime, slowTime = f.slowTime, slowMultiplier = f.slowMultiplier, stunTime = f.stunTime, summoned = f.summoned,hidden=f.hidden,
+                concealmentSources=f.concealmentSources,attackRevealRemaining=State.battlefield==null?0:Math.Max(0,f.attackRevealUntil-State.battlefield.elapsed),
+                rootTime=f.rootTime,resistanceTime=f.resistanceTime });}
             foreach (EffectState e in State.effects){if((e.sourceId!=null&&invisible.Contains(e.sourceId))||(e.targetId!=null&&invisible.Contains(e.targetId)))continue;copy.effects.Add(new EffectState { id = e.id, type = e.type, x = e.x, y = e.y, age = e.age,
                 targetX = e.targetX, targetY = e.targetY, slot = e.slot, value = e.value,
                 sourceId = e.sourceId, targetId = e.targetId, kind = e.kind });}

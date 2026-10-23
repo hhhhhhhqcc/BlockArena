@@ -19,6 +19,7 @@ namespace BlockArena.Networking
             public Peer Peer;
             public double DisconnectedAt = -1;
             public bool MarkedDisconnected;
+            public int VoiceSequence;
         }
         private sealed class Peer
         {
@@ -26,6 +27,9 @@ namespace BlockArena.Networking
             public Session Session;
             public double AcceptedAt, RejectedAt;
             public bool Rejected;
+            public double ChatAt, VoiceAt;
+            public double ChatTokens = 3, VoiceTokens = 8;
+            public int LastVoiceSequence = -1;
         }
         private readonly IWireCodec codec;
         private readonly ConcurrentQueue<AcceptedSocket> accepted = new ConcurrentQueue<AcceptedSocket>();
@@ -37,6 +41,7 @@ namespace BlockArena.Networking
         private int running, connectionCount, disposed;
         private string error;
         private float simulationAccumulator, broadcastAccumulator;
+        private int chatSequence;
         public int Port { get; private set; }
         public string Error { get { return Volatile.Read(ref error); } }
         public bool IsRunning { get { return Volatile.Read(ref running) != 0; } }
@@ -170,6 +175,8 @@ namespace BlockArena.Networking
                 Hello(peer, packet); return;
             }
             if (!ReferenceEquals(peer.Session.Peer, peer)) { peer.Wire.Close("该会话已在其他连接恢复。"); return; }
+            if (packet.type == "chat") { ProcessChat(peer, packet.message); return; }
+            if (packet.type == "voice") { ProcessVoice(peer, packet.voice); return; }
             if (packet.type != "action" || packet.command == null) { SendError(peer, "不支持的网络操作。"); return; }
             string placementId = packet.command.type == "place" ? packet.command.placementId : null;
             try
@@ -180,6 +187,56 @@ namespace BlockArena.Networking
             catch (InvalidOperationException ex) { SendError(peer, ex.Message, placementId); }
             catch (ArgumentException ex) { SendError(peer, ex.Message, placementId); }
             catch (Exception) { SendError(peer, "当前无法执行此操作。", placementId); }
+        }
+
+        private void ProcessChat(Peer peer, string value)
+        {
+            if (value == null || value.Length > WireProtocol.ChatMaxCharacters * 2) { SendError(peer, "聊天内容过长。"); return; }
+            var clean = new System.Text.StringBuilder();
+            foreach (char ch in value.Trim())
+            {
+                if (char.IsControl(ch) || ch == '<' || ch == '>') continue;
+                if (clean.Length >= WireProtocol.ChatMaxCharacters) break;
+                clean.Append(ch);
+            }
+            if (clean.Length > 0 && char.IsHighSurrogate(clean[clean.Length - 1])) clean.Length--;
+            if (clean.Length == 0) return;
+            double now = NetworkClock.Now;
+            peer.ChatTokens = Math.Min(3, peer.ChatTokens + Math.Max(0, now - peer.ChatAt) * .8);
+            peer.ChatAt = now;
+            if (peer.ChatTokens < 1) { SendError(peer, "发送得太快，稍等一下。"); return; }
+            peer.ChatTokens--;
+            PlayerState player = game.State.players.Find(p => p.id == peer.Session.PlayerId);
+            if (player == null) return;
+            var chat = new ChatMessage { id = ++chatSequence, playerId = player.id, name = player.name, slot = player.slot, text = clean.ToString() };
+            foreach (Peer destination in peers)
+                if (ActivePeer(destination)) Send(destination, new WirePacket { type = "chat", chat = chat });
+        }
+
+        private void ProcessVoice(Peer peer, VoiceFrame frame)
+        {
+            // Media is best effort. Invalid or excess frames are dropped without flooding errors.
+            if (frame == null || frame.pcm == null || frame.pcm.Length != WireProtocol.VoiceBase64Length || frame.sequence < 0 || frame.sequence <= peer.LastVoiceSequence) return;
+            byte[] pcm;
+            try { pcm = Convert.FromBase64String(frame.pcm); } catch (FormatException) { return; }
+            if (pcm.Length != WireProtocol.VoiceBytesPerFrame) return;
+            double now = NetworkClock.Now;
+            peer.VoiceTokens = Math.Min(8, peer.VoiceTokens + Math.Max(0, now - peer.VoiceAt) * 26);
+            peer.VoiceAt = now;
+            peer.LastVoiceSequence = frame.sequence;
+            if (peer.VoiceTokens < 1) return;
+            peer.VoiceTokens--;
+            var relay = new VoiceFrame { playerId = peer.Session.PlayerId, sequence = ++peer.Session.VoiceSequence, pcm = frame.pcm };
+            string encoded;
+            try { encoded = codec.Encode(new WirePacket { type = "voice", voice = relay }); }
+            catch (Exception) { return; }
+            foreach (Peer destination in peers)
+                if (!ReferenceEquals(destination, peer) && ActivePeer(destination)) destination.Wire.TrySend(encoded, false, true);
+        }
+
+        private static bool ActivePeer(Peer peer)
+        {
+            return peer.Session != null && !peer.Rejected && peer.Wire.IsOpen && ReferenceEquals(peer.Session.Peer, peer);
         }
 
         private void Hello(Peer peer, WirePacket packet)

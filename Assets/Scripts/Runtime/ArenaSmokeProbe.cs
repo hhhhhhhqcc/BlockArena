@@ -313,16 +313,25 @@ namespace BlockArena.Runtime
             ScreenCapture.CaptureScreenshot(Path.Combine(folder,"08-battle-zoom.png"));
             yield return new WaitForSecondsRealtime(.25f);
             VoxelCreature inspected=null;
-            var candidates=app.World.GetComponentsInChildren<VoxelCreature>();
-            Array.Sort(candidates,(a,b)=>(a.Kind=="skeleton"?0:1).CompareTo(b.Kind=="skeleton"?0:1));
-            foreach(var candidate in candidates)
+            // The shared army sight is finite: opposing deployments need time to meet.
+            // Keep the real snapshot and exact production pick path, waiting for contact.
+            deadline=Time.realtimeSinceStartup+25;
+            while(inspected==null&&app.State.phase=="battle"&&Time.realtimeSinceStartup<deadline)
             {
-                if(candidate.Kind=="steve"||candidate.Dead||candidate.Slot==app.Me.slot)continue;
-                Vector2 screen=camera.WorldToScreenPoint(candidate.transform.position+Vector3.up*(candidate.Height*candidate.Size*.5f));
-                app.InspectPointer(screen);
-                if(app.World.HoveredCreature!=null&&app.World.HoveredCreature.Slot!=app.Me.slot){inspected=app.World.HoveredCreature;break;}
+                var candidates=app.World.GetComponentsInChildren<VoxelCreature>();
+                Array.Sort(candidates,(a,b)=>(a.Kind=="skeleton"?0:1).CompareTo(b.Kind=="skeleton"?0:1));
+                foreach(var candidate in candidates)
+                {
+                    if(candidate.Kind=="steve"||!candidate.Battle||candidate.Dead||candidate.Slot==app.Me.slot||!candidate.gameObject.activeInHierarchy)continue;
+                    Vector3 projected=camera.WorldToScreenPoint(candidate.transform.position+Vector3.up*(candidate.Height*candidate.Size*.5f));
+                    Vector2 screen=projected;
+                    if(projected.z<=0||screen.x<0||screen.y<0||screen.x>Screen.width||screen.y>Screen.height||app.Hud.Contains(screen))continue;
+                    app.VerificationPointer=screen;app.InspectPointer(screen);
+                    if(app.World.HoveredCreature!=null&&app.World.HoveredCreature.Battle&&!app.World.HoveredCreature.Dead&&app.World.HoveredCreature.Slot!=app.Me.slot){inspected=app.World.HoveredCreature;break;}
+                }
+                if(inspected==null){app.VerificationPointer=new Vector2(-200,-200);yield return null;}
             }
-            if(inspected==null){Fail("enemy hover picking failed");yield break;}
+            if(inspected==null){ScreenCapture.CaptureScreenshot(Path.Combine(folder,"failure-enemy-hover.png"));Fail("enemy hover picking failed after waiting for visible battlefield contact: "+Describe(app));yield break;}
             float inspectUntil=Time.unscaledTime+.6f;
             bool captured=false;
             while(Time.unscaledTime<inspectUntil)

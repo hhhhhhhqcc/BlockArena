@@ -22,7 +22,8 @@ namespace BlockArena.Networking
         {
             public string Text;
             public int Bytes;
-            public TextFrame(string text, int bytes) { Text = text; Bytes = bytes; }
+            public double CreatedAt;
+            public TextFrame(string text, int bytes) { Text = text; Bytes = bytes; CreatedAt = NetworkClock.Now; }
         }
 
         private static readonly UTF8Encoding Encoding = new UTF8Encoding(false, true);
@@ -32,6 +33,7 @@ namespace BlockArena.Networking
         private readonly double frameRate, byteRate;
         private readonly ConcurrentQueue<TextFrame> inbound = new ConcurrentQueue<TextFrame>();
         private readonly Queue<TextFrame> outbound = new Queue<TextFrame>();
+        private readonly Queue<TextFrame> media = new Queue<TextFrame>();
         private readonly object sendGate = new object();
         private readonly AutoResetEvent sendWake = new AutoResetEvent(false);
         private readonly Thread reader, writer;
@@ -72,7 +74,7 @@ namespace BlockArena.Networking
             return true;
         }
 
-        public bool TrySend(string text, bool replaceSnapshot = false)
+        public bool TrySend(string text, bool replaceSnapshot = false, bool discardableMedia = false)
         {
             if (!IsOpen || text == null) return false;
             int bytes;
@@ -83,6 +85,18 @@ namespace BlockArena.Networking
             lock (sendGate)
             {
                 if (!IsOpen || drainAndClose) return false;
+                if (discardableMedia)
+                {
+                    // Audio may lose frames, gameplay may not. Keep less than a quarter-second
+                    // of media, and always dispatch snapshots/actions before these packets.
+                    while (media.Count >= 6)
+                    {
+                        TextFrame dropped = media.Dequeue(); outboundBytes -= dropped.Bytes;
+                    }
+                    if (bytes > 4096 || outboundBytes + bytes > outboundBudget) return false;
+                    media.Enqueue(new TextFrame(text, bytes)); outboundBytes += bytes;
+                    sendWake.Set(); return true;
+                }
                 int replacedBytes = replaceSnapshot && latestSnapshot != null ? latestSnapshot.Bytes : 0;
                 if ((!replaceSnapshot && outbound.Count >= 64) || outboundBytes - replacedBytes + bytes > outboundBudget)
                     overflow = true;
@@ -175,6 +189,15 @@ namespace BlockArena.Networking
                     {
                         if (outbound.Count > 0) frame = outbound.Dequeue();
                         else if (latestSnapshot != null) { frame = latestSnapshot; latestSnapshot = null; }
+                        else
+                        {
+                            while (media.Count > 0)
+                            {
+                                TextFrame candidate = media.Dequeue();
+                                if (NetworkClock.Now - candidate.CreatedAt <= .24) { frame = candidate; break; }
+                                outboundBytes -= candidate.Bytes;
+                            }
+                        }
                         if (frame != null) outboundBytes -= frame.Bytes;
                         finish = frame == null && drainAndClose;
                     }

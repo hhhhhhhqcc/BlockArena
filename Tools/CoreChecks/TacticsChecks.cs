@@ -59,10 +59,22 @@ internal static partial class Program
             var game=TacticalGame();Assert(game.State.battlefield!=null);Equal(0,game.State.fighters.Count);
             Advance(game,ArenaGame.TacticsSeconds+.1f);Equal("battle",game.State.phase);Assert(game.State.fighters.Count>0);
         });
+        Check("battle remains active beyond the former limit and resolves at 120 seconds",()=>{
+            var game=TacticalGame();WorldCall(game,"BeginBattle");game.State.battlefield=null;
+            Near(120,game.State.timeLeft);
+            foreach(var fighter in game.State.fighters){
+                fighter.hp=fighter.maxHp=100000;fighter.skills=new string[0];
+                fighter.speed=fighter.baseSpeed=0;fighter.attackCooldown=1000;
+            }
+            Advance(game,56);Equal("battle",game.State.phase);Near(64,game.State.timeLeft,.02f);
+            Advance(game,63.8f);Equal("battle",game.State.phase);Assert(game.State.timeLeft>0);
+            Advance(game,.3f);Equal("results",game.State.phase);
+        });
         Check("tactics dragging validates owner, living player, deployment bounds and terrain before acknowledging",()=>{
             var game=TacticalGame();var p=game.State.players[0];var u=p.units[0];p.ready=true;
-            game.Apply("a",new GameCommand{type="place",unitId=u.id,x=0,y=300,placementId="drag-1"});
-            Near(0,u.x);Near(300,u.y);Equal("drag-1",u.placementId);Assert(!p.ready);
+            Point2 deployment=ArenaGame.FormationToWorld(p,0,300);
+            game.Apply("a",new GameCommand{type="place",unitId=u.id,x=deployment.x,y=deployment.y,placementId="drag-1"});
+            Near(deployment.x,u.x);Near(deployment.y,u.y);Equal("drag-1",u.placementId);Assert(!p.ready);
             var bad=new[]{new GameCommand{type="place",unitId=game.State.players[1].units[0].id,x=0,y=300},
                 new GameCommand{type="place",unitId=u.id,x=0,y=0},new GameCommand{type="place",unitId=u.id,x=float.NaN,y=300}};
             foreach(var command in bad){string before=Json(game.State);Reject(()=>game.Apply("a",command));Equal(before,Json(game.State));}

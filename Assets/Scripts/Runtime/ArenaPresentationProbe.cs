@@ -144,7 +144,7 @@ namespace BlockArena.Runtime
             if (world.CommanderHitCount != 3) { Fail("same snapshot rearmed the crystal"); yield break; }
             float deadline = Time.realtimeSinceStartup + 7;
             float[] shakePeaks = new float[3];
-            bool rise = false, launch = false, hit = false;
+            bool rise = false, launch = false, hit = false, grandGeometry = false;
             while (world.RitualActive && Time.realtimeSinceStartup < deadline)
             {
                 int impact = world.RitualImpactCount;
@@ -153,11 +153,24 @@ namespace BlockArena.Runtime
                 { rise = true; ScreenCapture.CaptureScreenshot(Path.Combine(folder, "01-pillar-rise.png")); }
                 if (!launch && world.RitualAge >= 1.75f)
                 { launch = true; ScreenCapture.CaptureScreenshot(Path.Combine(folder, "02-crystal-projectile.png")); }
+                if (!grandGeometry && world.RitualAge >= 1.25f)
+                {
+                    Bounds pillar = world.RitualPillarBounds, crystal = world.RitualCrystalBounds, platform = world.RitualPlatformBounds;
+                    if (pillar.size.y < 7.2f || pillar.size.x < 4 || pillar.size.z < 4 ||
+                        crystal.size.x < 2.8f || crystal.size.y < 2.8f || crystal.size.z < 2.8f ||
+                        platform.size.x < 8.8f || platform.size.z < 8.8f || crystal.center.y < 9.8f)
+                    { Fail("grand crystal ceremony did not enlarge the actual rendered column, floating crystal and platform: pillar=" + pillar + " crystal=" + crystal + " platform=" + platform); yield break; }
+                    if (world.RitualParticleCapacity != 600 || world.RitualParticleCount > world.RitualParticleCapacity)
+                    { Fail("grand ritual changed or exceeded the existing shared particle budget"); yield break; }
+                    grandGeometry = true;
+                    Debug.Log("ARENA_GRAND_CRYSTAL_GEOMETRY pillar=" + pillar + " crystal=" + crystal + " platform=" + platform + " particles=" + world.RitualParticleCount + "/" + world.RitualParticleCapacity);
+                    ScreenCapture.CaptureScreenshot(Path.Combine(folder, "12-grand-crystal-fully-emerged.png"));
+                }
                 if (!hit && world.RitualImpactCount == 3)
                 { hit = true; ScreenCapture.CaptureScreenshot(Path.Combine(folder, "03-heavy-impact.png")); }
                 yield return null;
             }
-            if (world.RitualActive || world.RitualImpactCount != 3 || world.RitualLaunchCount != 3)
+            if (world.RitualActive || world.RitualImpactCount != 3 || world.RitualLaunchCount != 3 || !grandGeometry)
             { Fail("ritual did not complete three sequential launches and hits in time"); yield break; }
             if (!(shakePeaks[0] > 0 && shakePeaks[1] > shakePeaks[0] && shakePeaks[2] > shakePeaks[1]))
             { Fail("screen shake did not increase with 1/5/10 damage: " + string.Join(",", shakePeaks)); yield break; }
@@ -186,6 +199,14 @@ namespace BlockArena.Runtime
             world.SetState(snapshot, "ritual-0");
             if (world.PlannedExecutionCount != 4 || world.ExecutionCount != 0)
             { Fail("lethal crystal strikes were not marked before impact"); yield break; }
+            Transform ceremony = world.transform.Find("Pooled effects/End crystal judgment ceremony");
+            if (ceremony == null) { Fail("grand crystal ceremony root is missing"); yield break; }
+            int pooledCeremonyNodes = ceremony.GetComponentsInChildren<Transform>(true).Length;
+            int fragments = 0;
+            foreach (Transform node in ceremony.GetComponentsInChildren<Transform>(true))
+                if (node.name.StartsWith("Steve voxel ")) fragments++;
+            if (pooledCeremonyNodes > 230 || fragments != 128)
+            { Fail("grand crystal enlarged effects by adding an unbounded or excessive fragment pool"); yield break; }
             deadline = Time.realtimeSinceStartup + 25;
             bool[,] executionStages = new bool[4, 5];
             float[,] executionStageTimes = new float[4, 5];
@@ -199,6 +220,8 @@ namespace BlockArena.Runtime
             bool secondCloseupCaptured = false;
             while (world.RitualActive && Time.realtimeSinceStartup < deadline)
             {
+                if (world.RitualParticleCount > world.RitualParticleCapacity || world.RitualParticleCapacity != 600)
+                { Fail("serial grand execution exceeded the shared particle budget"); yield break; }
                 int visibleTargets = 0;
                 for (int slot = 0; slot < 4; slot++)
                 {
@@ -268,7 +291,7 @@ namespace BlockArena.Runtime
                         Vector3.Distance(world.ViewCamera.transform.position, executionViewPosition) < 2)
                     { Fail("slot " + slot + " execution camera did not provide a moderate target closeup within 45-88% of the full arena size"); yield break; }
                     string frameDetails;
-                    if (!ExecutionBoundsVisible(world.ViewCamera, snapshot.players[slot].steve, out frameDetails))
+                    if (!ExecutionBoundsVisible(world, snapshot.players[slot].steve, out frameDetails))
                     { Fail("slot " + slot + " execution camera clipped the crystal platform or target effects: " + frameDetails); yield break; }
                     Debug.Log("ARENA_EXECUTION_BOUNDS slot=" + slot + " " + frameDetails);
                 }
@@ -293,6 +316,8 @@ namespace BlockArena.Runtime
                 if (commander.IsExecuting) { Fail("commander execution survived the ritual deadline"); yield break; }
             world.SetState(snapshot, "ritual-0");
             if (world.ExecutionCount != 4 || world.RitualActive) { Fail("same result replayed executions"); yield break; }
+            if (ceremony.GetComponentsInChildren<Transform>(true).Length != pooledCeremonyNodes)
+            { Fail("duplicate settlement grew the grand execution geometry pool"); yield break; }
             yield return new WaitForSecondsRealtime(1.2f);
             if (world.CameraShakeStrength > .001f) { Fail("execution camera shake did not settle"); yield break; }
             Debug.Log("ARENA_EXECUTION_CAMERA restoredSize=" + world.ViewCamera.orthographicSize.ToString("F3") + " baselineSize=" + executionViewSize.ToString("F3") + " positionError=" + Vector3.Distance(world.ViewCamera.transform.position, executionViewPosition).ToString("F3") + " playerZoom=" + world.ZoomFactor.ToString("F3"));
@@ -457,25 +482,20 @@ namespace BlockArena.Runtime
                 Vector3.Distance(world.ViewCamera.transform.position, position) < .45f &&
                 world.ExecutionCameraWeight < .001f;
         }
-        static bool ExecutionBoundsVisible(Camera camera, Point2 commander, out string details)
+        static bool ExecutionBoundsVisible(BlockArena.Presentation.ArenaWorld world, Point2 commander, out string details)
         {
-            // Independent world-space limits cover the whole firing platform and the target's effects.
-            // Include the ground sigil, high crystal corners, expanding shockwave and full soul ascent.
-            Vector3 target = new Vector3(commander.x / 25f, .06f, commander.y / 25f);
-            Vector3[] points = new Vector3[13];
-            int point = 0;
-            for (int x = -1; x <= 1; x += 2)
-                for (int z = -1; z <= 1; z += 2)
-                {
-                    points[point++] = new Vector3(x * 2.9f, .08f, z * 2.9f);
-                    points[point++] = new Vector3(x * 1.5f, 6.9f, z * 1.5f);
-                    points[point++] = target + new Vector3(x * 2.7f, 0, z * 2.7f);
-                }
-            points[point] = target + Vector3.up * 4.5f;
+            // Use real renderer bounds, so enlarged geometry cannot pass with the old 6.9-high fixture.
+            Vector3 target = world.WorldSurfacePoint(commander.x, commander.y);
+            var points = new System.Collections.Generic.List<Vector3>();
+            foreach (Bounds bounds in new[] { world.RitualPillarBounds, world.RitualCrystalBounds, world.RitualPlatformBounds,
+                new Bounds(target + Vector3.up * 2.1f, new Vector3(8, 5.2f, 8)) })
+                for (int cell = 0; cell < 8; cell++)
+                    points.Add(bounds.center + Vector3.Scale(bounds.extents,
+                        new Vector3((cell & 1) == 0 ? -1 : 1, (cell & 2) == 0 ? -1 : 1, (cell & 4) == 0 ? -1 : 1)));
             Vector2 minimum = Vector2.one, maximum = Vector2.zero;
-            for (int i = 0; i < points.Length; i++)
+            for (int i = 0; i < points.Count; i++)
             {
-                Vector3 viewport = camera.WorldToViewportPoint(points[i]);
+                Vector3 viewport = world.ViewCamera.WorldToViewportPoint(points[i]);
                 if (viewport.z <= 0 || viewport.x < .025f || viewport.x > .975f || viewport.y < .025f || viewport.y > .975f)
                 {
                     details = "worldPoint=" + points[i].ToString("F3") + " viewport=" + viewport.ToString("F3");
@@ -484,7 +504,7 @@ namespace BlockArena.Runtime
                 minimum = Vector2.Min(minimum, new Vector2(viewport.x, viewport.y));
                 maximum = Vector2.Max(maximum, new Vector2(viewport.x, viewport.y));
             }
-            details = "viewportMin=" + minimum.ToString("F3") + " viewportMax=" + maximum.ToString("F3") + " points=" + points.Length;
+            details = "viewportMin=" + minimum.ToString("F3") + " viewportMax=" + maximum.ToString("F3") + " actualBoundsPoints=" + points.Count;
             return true;
         }
         static bool VerifyCountdown()

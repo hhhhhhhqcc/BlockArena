@@ -55,6 +55,10 @@ namespace BlockArena.Core
         public List<ShopOffer> market = new List<ShopOffer>();
         public List<string> upgrades = new List<string>();
         public Point2 steve;
+        // Identity/color stays in slot; battlefield deployment rotates/translates the saved formation.
+        public bool deployed;
+        public int deploymentSide;
+        public Point2 deploymentOffset;
         public Point2 steveDestination;
         public bool steveNavigating;
         public string commanderSkill="drums";
@@ -85,10 +89,15 @@ namespace BlockArena.Core
         public bool summoned, neutral;
         public bool dead;
         public bool hidden;
+        // Presentation-only provenance. The host's existing hidden/discovery rules remain authoritative.
+        // 1 = forest, 2 = friendly smoke, 4 = waiting in an ambush node.
+        public int concealmentSources;
+        public float attackRevealRemaining;
         public float resistanceTime,rootTime;
+        public float slowMultiplier = 1;
         internal float baseSpeed,baseAttackSpeed,baseRange,baseAttack,baseArmor;
         internal float environmentDamage=1,healingMultiplier=1,statusDurationMultiplier=1,commandHaste,commandGuard;
-        internal float revealUntil,trapUntil;
+        internal float revealUntil,trapUntil,attackRevealUntil;
         internal bool isDecoy;
         internal int tacticIndex;
         internal float tacticWait;
@@ -98,7 +107,7 @@ namespace BlockArena.Core
         internal bool mini;
         internal string targetId;
         internal string lastAttackerId;
-        internal float poisonTick, burnTick, poisonDps, burnDps, slowMultiplier = 1;
+        internal float poisonTick, burnTick, poisonDps, burnDps;
         internal FighterState poisonSource, burnSource;
         internal int attacks, hits;
         internal bool deathTriggered;

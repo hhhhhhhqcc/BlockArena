@@ -111,7 +111,8 @@ namespace BlockArena.Core
         }
 
         public static void Tick(FighterState f, List<FighterState> fighters, float dt,
-            Action<FighterState, float, FighterState> damage, Action<string, FighterState, FighterState, float> effect)
+            Action<FighterState, float, FighterState> damage, Action<string, FighterState, FighterState, float> effect,
+            float battlefieldEdge = 410)
         {
             if (f.dead || dt <= 0 || float.IsNaN(dt) || float.IsInfinity(dt)) return;
             f.stunTime = Math.Max(0, f.stunTime - dt); f.slowTime = Math.Max(0, f.slowTime - dt);
@@ -167,8 +168,8 @@ namespace BlockArena.Core
                     {
                         float dx = (f.x - enemy.x) / Math.Max(1, nearest), dy = (f.y - enemy.y) / Math.Max(1, nearest);
                         effect?.Invoke("teleport", f, enemy, nearest);
-                        f.x = Clamp(enemy.x + dx * Math.Max(20, f.range * .8f), -410, 410);
-                        f.y = Clamp(enemy.y + dy * Math.Max(20, f.range * .8f), -410, 410);
+                        f.x = Clamp(enemy.x + dx * Math.Max(20, f.range * .8f), -battlefieldEdge, battlefieldEdge);
+                        f.y = Clamp(enemy.y + dy * Math.Max(20, f.range * .8f), -battlefieldEdge, battlefieldEdge);
                         f.targetId = enemy.id; f.think = .5f; Cooldown(f, a);
                     }
                 }
@@ -211,7 +212,7 @@ namespace BlockArena.Core
 
         public static void Attack(FighterState f, FighterState target, List<FighterState> fighters,
             Action<FighterState, float, FighterState> damage, Action<string, FighterState, FighterState, float> effect,
-            Action<FighterState, string, int> summon)
+            Action<FighterState, string, int> summon, float battlefieldEdge = 410)
         {
             if (f.dead || target == null || target.dead || f.stunTime > 0) return;
             f.attacks++;
@@ -271,8 +272,8 @@ namespace BlockArena.Core
                     case "knockback":
                         float distance = Distance(f, target), dx = target.x - f.x, dy = target.y - f.y;
                         if (distance < .01f) { dx = f.side == 0 ? 1 : f.side; dy = 0; distance = 1; }
-                        target.x = Clamp(target.x + dx / distance * a.value, -410, 410);
-                        target.y = Clamp(target.y + dy / distance * a.value, -410, 410);
+                        target.x = Clamp(target.x + dx / distance * a.value, -battlefieldEdge, battlefieldEdge);
+                        target.y = Clamp(target.y + dy / distance * a.value, -battlefieldEdge, battlefieldEdge);
                         effect?.Invoke("knockback", f, target, a.value); Cooldown(f, a); break;
                 }
             }

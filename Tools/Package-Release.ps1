@@ -1,8 +1,8 @@
-﻿# Compatible with Windows PowerShell 5.1 and PowerShell 7. No existing output is replaced.
+# Compatible with Windows PowerShell 5.1 and PowerShell 7. No existing output is replaced.
 [CmdletBinding()]
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')]
-    [string]$Version = '0.9.5',
+    [string]$Version = '0.13.0',
     [string]$OutputDirectory
 )
 
@@ -162,11 +162,26 @@ $readme = @"
 单人：点击“单人试玩”，直接与三名电脑对战。
 联机：房主选择“创建房间”；朋友选择“加入房间”，填写房主地址和端口。
 局域网填写房主的局域网 IP；内网穿透须支持 TCP，默认端口 7777。
-所有人使用同版 v$Version，联机协议 v7。防火墙提示时允许游戏联网。
+所有人使用同版 v$Version，联机协议 v11，与 v0.12.0 及更早客户端不兼容。
+防火墙提示时允许游戏联网；语音沿用同一 TCP 端口，无需额外映射。
 
 WASD 移动 Steve；Shift + 左键拖动框选生物，Shift + 单击多选。
 准备与战术阶段左键拖动生物摆位；战术阶段右键设置路线。
-Q 使用指挥技能；Esc 打开菜单。窗口、全屏和分辨率在“设置”中切换。
+R 使用指挥技能；Q / E 左右旋转视角90°；Esc 打开菜单。
+窗口、全屏、分辨率和自定义按键均在“设置”中切换。
+Enter 或点击左下聊天按钮开始输入，再按 Enter 发送；Esc 关闭输入。
+按住 V 说话，或点击左下麦克风按钮持续开麦；默认关闭，断线自动关闭。
+扬声器按钮可静音其他指挥官。系统须允许桌面应用使用麦克风。
+
+随机地图展开后宽深各扩大两倍，面积为原来的四倍。
+战斗最长120秒，任一军团获胜时可提前结束。
+四方 Steve 与军团整体随机部署，保留准备时的相对阵型。
+地图和普通敌军全场可见；只有尚未发现的隐蔽敌军不显示。
+己方隐蔽生物轻微淡化并显示图标，属性框可查看树林、烟幕、伏击来源。
+主动攻击暴露2秒，倒计时由房主服务器同步；索敌和隐蔽发现规则保留。
+竞技场从中心向外展开，镜头随后拉远；本方地盘有专属边框和箭头。
+降雪时河岸先出现窄冰层，开战后沿河继续结冰，20秒完成。
+悬停矿脉、圣坛等地图目标查看效果；点击生物后可拖动属性框顶部移动。
 
 通常直接在游戏里开房即可；需要无画面服务器时，运行“联机工具”里的
 “启动专用服务器.cmd”。可在命令行末尾填写端口，如：启动专用服务器.cmd 8888
@@ -221,7 +236,7 @@ $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
 Write-NewReleaseText -Path (Join-Path $outputRoot 'SHA256SUMS.txt') -Text ($archiveHash + ' *' + $archiveName)
 $manifest = [ordered]@{
     version = $Version
-    protocol = 7
+    protocol = 11
     createdUtc = [DateTime]::UtcNow.ToString('o')
     sourceBuild = $buildRoot
     playerDirectory = $playerRoot

@@ -54,6 +54,13 @@ internal static partial class Program
         FinishDeployment(game);
         // Legacy numeric checks exercise creature rules on the original flat, clear arena.
         game.State.battlefield=null;
+        foreach(var player in game.State.players)if(player.deployed){
+            foreach(var unit in player.units){
+                var local=ArenaGame.WorldToFormation(player,unit.x,unit.y);
+                var at=ArenaGame.LocalToWorld(player.slot,local.x,local.y);unit.x=at.x;unit.y=at.y;
+            }
+            player.deployed=false;player.deploymentOffset=new Point2();player.steve=ArenaGame.LocalToWorld(player.slot,0,390);
+        }
         foreach(var fighter in game.State.fighters){
             var owner=game.State.players.Find(p=>p.id==fighter.ownerId);
             var unit=owner==null?null:owner.units.Find(u=>u.id==fighter.unitId);
@@ -397,6 +404,8 @@ internal static partial class Program
         AntiSnowballChecks();
         WorldRulesChecks();
         TacticsChecks();
+        ExpansionChecks();
+        VisionChecks();
         Check("seeded four-player AI match completes without hanging", () =>
         {
             ArenaGame g = new ArenaGame("host", "测试", 2026); g.Apply("host", new GameCommand { type = "start" }); g.SetConnected("host", false);

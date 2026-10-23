@@ -10,7 +10,7 @@ namespace BlockArena.Runtime
         float eventPreviewAt = -20, leaderAnnouncedAt = -20, dismissalPendingUntil;
         string dismissalPendingId;
         readonly Spring eventPreviewMotion = new Spring();
-        bool ArmyAvailable { get { return app.Me != null && !app.Me.eliminated && app.State != null && (app.State.phase == "prep" || app.State.phase == "recruit") && !app.ShowRoom && !app.ShowHelp && !app.ShowBestiary; } }
+        bool ArmyAvailable { get { return app.Me != null && !app.Me.eliminated && app.State != null && (app.State.phase == "prep" || app.State.phase == "recruit") && !app.ShowRoom && !app.ShowBestiary; } }
         Rect ArmyToggleRect { get { return new Rect(18,height-114,220,40); } }
         Rect ArmyPanelRect { get { return new Rect(18,Mathf.Max(80,height-636),390,Mathf.Min(508,height-172)); } }
         Rect EventIntroRect { get { return new Rect(width/2-270,91,540,125); } }
@@ -52,7 +52,7 @@ namespace BlockArena.Runtime
 
         void DrawEconomyObjectives()
         {
-            if(app.State==null||app.Me==null||app.ShowRoom||app.ShowHelp||app.ShowBestiary||app.Me.recruitPending||app.State.phase=="lobby"||app.State.phase=="finished")return;
+            if(app.State==null||app.Me==null||app.ShowRoom||app.ShowBestiary||app.Me.recruitPending||app.State.phase=="lobby"||app.State.phase=="finished")return;
             if(app.State.phase=="battle"&&!string.IsNullOrEmpty(app.State.leaderId)) {
                 Rect r=BountySummaryRect;Panel(r,new Color(.12f,.095f,.06f,.94f));
                 float entry=Mathf.Clamp01((Time.unscaledTime-leaderAnnouncedAt)/.55f);

@@ -7,6 +7,7 @@ namespace BlockArena.Core
     {
         public string mapId, weather = "clear";
         public int seed;
+        public float scale = 1, halfExtent = 410;
         public float elapsed, revealAge;
         public List<TerrainState> terrain = new List<TerrainState>();
         public List<ObjectiveState> objectives = new List<ObjectiveState>();
@@ -15,8 +16,8 @@ namespace BlockArena.Core
     }
     [Serializable] public sealed class TerrainState
     {
-        public string id, kind;
-        public float x,y,radius,halfWidth,halfHeight,height,hp,maxHp,burnTime,freeze;
+        public string id, kind, shape;
+        public float x,y,radius,halfWidth,halfHeight,height,hp,maxHp,burnTime,freeze,rotation;
     }
     [Serializable] public sealed class ObjectiveState
     {

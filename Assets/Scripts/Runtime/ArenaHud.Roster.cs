@@ -41,7 +41,7 @@ namespace BlockArena.Runtime
             if (app.PlacementDragging) return true;
             if (EconomyCovers(p)) return true;
             // Full-screen overlays own their shade as well as their central panel.
-            if (app.ShowGameMenu || app.ShowRoom || app.ShowHelp || app.ShowBestiary) return true;
+            if (app.ShowGameMenu || app.ShowRoom || app.ShowBestiary) return true;
             if (RecruitVisible || PinnedInspectionCovers(p)) return true;
             if (marketDragging || marketPointerOwned || audioPointerOwned || skillPointerOwned) return true;
             if (AudioCovers(p) || SkillUiCovers(p)) return true;

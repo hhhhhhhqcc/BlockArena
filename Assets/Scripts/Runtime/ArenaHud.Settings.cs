@@ -11,7 +11,7 @@ namespace BlockArena.Runtime
             get { return showSettings; }
             set {
                 if(showSettings==value)return;
-                showSettings=value;audioPointerOwned=false;audioSlider=-1;ClearHover();resetMenuFocus=true;
+                showSettings=value;audioPointerOwned=false;audioSlider=-1;bindingAction=null;bindingFeedback="";ClearHover();resetMenuFocus=true;
                 if(value){
                     settingsTab=0;resetDisplayDraft=true;
                     marketPointerOwned=marketDragging=false;skillPointerOwned=false;
@@ -21,7 +21,7 @@ namespace BlockArena.Runtime
         }
         public bool ShowSettings { get { return ShowAudio; } set { ShowAudio=value; } }
         public bool SettingsVisible { get { return ShowSettings; } }
-        bool SettingsControlsAvailable { get { return ShowSettings&&!app.ShowHelp&&!app.ShowBestiary&&!(app.State!=null&&app.ShowRoom); } }
+        bool SettingsControlsAvailable { get { return ShowSettings&&!app.ShowBestiary&&!(app.State!=null&&app.ShowRoom); } }
         Rect SettingsPanelRect { get { return new Rect(FrontLeft,Mathf.Max(72,(height-710)/2),1040,710); } }
         Rect SettingsCloseRect { get { Rect r=SettingsPanelRect;return new Rect(r.x+25,r.y+25,42,42); } }
         Rect SettingsContentRect { get { Rect r=SettingsPanelRect;return new Rect(r.x+263,r.y+112,r.width-291,r.height-147); } }
@@ -59,8 +59,8 @@ namespace BlockArena.Runtime
         internal Rect SettingsResolutionNextScreenRect { get { Metrics();return ToScreenRect(SettingsResolutionNextRect); } }
         internal Rect SettingsApplyScreenRect { get { Metrics();return ToScreenRect(SettingsApplyRect); } }
         internal Rect SettingsResetScreenRect { get { Metrics();return ToScreenRect(SettingsResetRect); } }
-        internal Rect SettingsTabScreenRect(int index){Metrics();return ToScreenRect(SettingsTabRect(Mathf.Clamp(index,0,1)));}
-        internal Rect SettingsNavigationScreenRect(string action){Metrics();int index=action=="bestiary"?0:action=="help"?1:2;return ToScreenRect(SettingsNavigationRect(index));}
+        internal Rect SettingsTabScreenRect(int index){Metrics();return ToScreenRect(SettingsTabRect(Mathf.Clamp(index,0,2)));}
+        internal Rect SettingsNavigationScreenRect(string action){Metrics();return action=="bestiary"||action=="room"?ToScreenRect(SettingsNavigationRect(action=="bestiary"?0:1)):Rect.zero;}
         internal Rect SettingsActionScreenRect(string action)
         {
             switch(action){
@@ -75,12 +75,12 @@ namespace BlockArena.Runtime
                 case "mute":return SettingsMuteScreenRect;
                 case "commander-range":return CommanderRangeToggleScreenRect;
                 case "creature-range":return CreatureRangeToggleScreenRect;
-                case "bestiary":case "help":case "room":return SettingsNavigationScreenRect(action);
+                case "bestiary":case "room":return SettingsNavigationScreenRect(action);
                 default:return Rect.zero;
             }
         }
         internal int SettingsTabForVerification { get { return settingsTab; } }
-        public void SetSettingsTab(int tab){settingsTab=Mathf.Clamp(tab,0,1);ClearHover();audioSlider=-1;}
+        public void SetSettingsTab(int tab){settingsTab=Mathf.Clamp(tab,0,2);bindingAction=null;bindingFeedback="";ClearHover();audioSlider=-1;}
 
         void DrawAudio()
         {
@@ -97,15 +97,15 @@ namespace BlockArena.Runtime
                 Fill(new Rect(r.x+246,r.y+120,1,r.height-153),line);
                 if(MenuActionButton(SettingsTabRect(0),"sound","声音与辅助",settingsTab==0?new Color(.14f,.30f,.27f):new Color(.055f,.12f,.14f),true))SetSettingsTab(0);
                 if(MenuActionButton(SettingsTabRect(1),"display","显示设置",settingsTab==1?new Color(.14f,.30f,.27f):new Color(.055f,.12f,.14f),true))SetSettingsTab(1);
+                if(MenuActionButton(SettingsTabRect(2),"keys","按键设置",settingsTab==2?new Color(.14f,.30f,.27f):new Color(.055f,.12f,.14f),true))SetSettingsTab(2);
                 Text(new Rect(r.x+34,r.y+322,190,27),"探索",micro,muted);
                 Fill(new Rect(r.x+34,r.y+353,184,1),line);
                 if(MenuActionButton(SettingsNavigationRect(0),"book","生物图鉴",new Color(.055f,.12f,.14f),true))app.ShowBestiary=true;
-                if(MenuActionButton(SettingsNavigationRect(1),"help","玩法手册",new Color(.055f,.12f,.14f),true))app.ShowHelp=true;
                 bool enabled=GUI.enabled;GUI.enabled=enabled&&app.State!=null&&!app.QuickStarting;
-                if(MenuActionButton(SettingsNavigationRect(2),"room","房间",new Color(.055f,.12f,.14f),true))app.ShowRoom=true;
+                if(MenuActionButton(SettingsNavigationRect(1),"room","房间",new Color(.055f,.12f,.14f),true))app.ShowRoom=true;
                 GUI.enabled=enabled;
                 Text(new Rect(r.x+34,r.yMax-59,190,29),"Esc  返回",micro,muted);
-                if(settingsTab==0)DrawSoundAndAssistSettings();else DrawDisplaySettings();
+                if(settingsTab==0)DrawSoundAndAssistSettings();else if(settingsTab==1)DrawDisplaySettings();else DrawKeyBindingsSettings();
             } finally {drawingAudio=previousDrawing;}
         }
         void DrawSoundAndAssistSettings()
@@ -189,6 +189,11 @@ namespace BlockArena.Runtime
                 if(icon=="window")Fill(new Rect(r.x+5*u,r.y+6*u,14*u,2*u),tint);
                 else if(icon=="fullscreen"){Fill(new Rect(r.x+6*u,r.y+7*u,4*u,2*u),tint);Fill(new Rect(r.x+6*u,r.y+7*u,2*u,4*u),tint);Fill(new Rect(r.x+14*u,r.y+12*u,4*u,2*u),tint);Fill(new Rect(r.x+16*u,r.y+10*u,2*u,4*u),tint);}
                 Fill(new Rect(r.x+10*u,r.y+18*u,4*u,3*u),tint);Fill(new Rect(r.x+6*u,r.y+21*u,12*u,2*u),tint);return;
+            }
+            if(icon=="keys"){
+                RoundFill(new Rect(r.x+u,r.y+5*u,22*u,15*u),tint,2*u);
+                for(int row=0;row<2;row++)for(int col=0;col<5;col++)Fill(new Rect(r.x+(3+col*4)*u,r.y+(8+row*4)*u,2*u,2*u),new Color(.04f,.11f,.13f));
+                Fill(new Rect(r.x+7*u,r.y+16*u,10*u,2*u),new Color(.04f,.11f,.13f));return;
             }
             if(icon=="single"){
                 for(int i=0;i<8;i++)Fill(new Rect(r.x+(5+i)*u,r.y+(3+i)*u,2*u,(18-i*2)*u),tint);return;

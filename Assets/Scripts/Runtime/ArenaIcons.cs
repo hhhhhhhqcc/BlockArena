@@ -94,6 +94,12 @@ namespace BlockArena.Runtime
                     c.Line(9,23,25,7,ink,5);c.Line(10,22,25,7,light,3);c.Line(12,21,26,7,steel,2);c.Line(8,18,17,27,gold,3);c.Line(7,25,11,21,wood,4);c.Box(4,27,4,3,gold);break;
                 case "speed":
                     c.Line(5,21,23,6,soul,4);c.Line(10,25,27,10,light,3);c.Line(4,13,14,13,gold,2);c.Line(2,19,10,19,gold,2);c.Box(20,5,8,6,light);break;
+                case "stride":
+                    c.Box(9,4,9,14,steel);c.Box(8,17,16,7,soul);c.Box(6,24,22,4,light);c.Box(20,20,7,5,soul);c.Line(3,11,7,11,gold,2);c.Line(2,17,6,17,gold,2);break;
+                case "vision":
+                    c.Line(3,16,10,9,steel,3);c.Line(10,9,22,9,steel,3);c.Line(22,9,29,16,steel,3);c.Line(3,16,10,23,steel,3);c.Line(10,23,22,23,steel,3);c.Line(22,23,29,16,steel,3);c.Box(12,12,8,8,soul);c.Box(15,13,3,5,light);break;
+                case "concealment":
+                    c.Line(4,12,10,19,steel,3);c.Line(10,19,22,19,soul,3);c.Line(22,19,28,12,steel,3);c.Line(8,18,5,24,soul,2);c.Line(16,20,16,27,soul,2);c.Line(24,18,27,24,soul,2);break;
                 case "range":
                     c.Box(14,3,4,26,steel);c.Box(3,14,26,4,steel);c.Box(10,10,12,12,ink);c.Box(13,13,6,6,soul);break;
                 case "book":

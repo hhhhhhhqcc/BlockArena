@@ -11,9 +11,9 @@ namespace BlockArena.Core
         public static MapDefinition GetMap(string id)
         {
             switch(id){
-                case "courtyards":return new MapDefinition{id=id,name="四庭高台",description="四桥通向中央高台；夺取圣坛，利用废墟掩护。雷暴更偏爱高地。",color="#D0AE78",weathers=new[]{"clear","storm"}};
-                case "bog":return new MapDefinition{id=id,name="腐沼矿场",description="湿地、密林与残垣交错；两处矿脉与瞭望塔迫使军团分兵。",color="#6B9B79",weathers=new[]{"rain","fog","heat"}};
-                case "frost":return new MapDefinition{id=id,name="霜林遗迹",description="穿越结冰河道、争夺中央信标和补给箱；雪林适合伏击。",color="#9AC9D9",weathers=new[]{"snow","fog"}};
+                case "courtyards":return new MapDefinition{id=id,name="四庭高台",description="四条古代仪式长桥汇于断崖圣坛；侧庭补给与中央高地形成两条争夺路线。雷暴迫使守军离开高台。",color="#D0AE78",weathers=new[]{"clear","storm"}};
+                case "bog":return new MapDefinition{id=id,name="腐沼矿场",description="弯曲沼河贯穿废弃矿场；沿岸矿道通向两处矿脉，中央干地瞭望塔控制分岔。",color="#6B9B79",weathers=new[]{"rain","fog","heat"}};
+                case "frost":return new MapDefinition{id=id,name="霜林遗迹",description="曲折冰河划开古代林地；三座石桥连接双侧山脊，雪后结冰会打开通往信标的捷径。",color="#9AC9D9",weathers=new[]{"snow","fog"}};
                 default:throw new InvalidOperationException("未知地图");
             }
         }
@@ -65,7 +65,7 @@ namespace BlockArena.Core
                     state.terrain.Add(Rect("ruin-"+i,"ruins",ruin.x,ruin.y,75,48,.5f));
                 }
                 // The ring is a gameplay chasm; the four narrow bridges are the only ground crossings.
-                state.terrain.Add(new TerrainState{id="moat",kind="chasm",radius=235,halfWidth=135});
+                state.terrain.Add(new TerrainState{id="moat",kind="chasm",radius=235,halfWidth=135,halfHeight=32});
                 state.objectives.Add(Objective("altar","altar","中央圣坛",0,0,2));
             }else if(mapId=="bog"){
                 state.terrain.Add(Rect("west-marsh","wetland",-170,25,220,250));
@@ -90,13 +90,84 @@ namespace BlockArena.Core
             }
             return state;
         }
+        // Production battlefields have four times the playable area. Keep Create at the
+        // original size for saved fixtures and isolated legacy rule checks.
+        public static BattlefieldState CreateExpanded(string mapId,string weather,int seed)
+        {
+            var state=Create(mapId,weather,seed);
+            state.scale=2;state.halfExtent=820;
+            state.terrain.Clear();state.objectives.Clear();
+            // Designed as one connected landscape. Randomness moves the four armies,
+            // not the bridges, shorelines or rewards that players need to learn.
+            if(mapId=="courtyards"){
+                state.terrain.Add(Rect("central-highland","highland",0,0,460,460,1.65f));
+                state.terrain.Add(new TerrainState{id="moat",kind="chasm",radius=510,halfWidth=300,halfHeight=76});
+                for(int side=0;side<4;side++){
+                    Point2 bridge=ArenaGame.LocalToWorld(side,0,380);
+                    state.terrain.Add(Rect("bridge-"+side,"bridge",bridge.x,bridge.y,side%2==0?136:340,side%2==0?340:136,.7f));
+                    Point2 ruin=ArenaGame.LocalToWorld(side,200,560);
+                    state.terrain.Add(Rect("ruin-"+side,"ruins",ruin.x,ruin.y,side%2==0?110:70,side%2==0?70:110,.65f));
+                    Point2 reward=ArenaGame.LocalToWorld(side,-120,600);
+                    state.objectives.Add(Objective("courtyard-cache-"+side,"supply","古庭补给",reward.x,reward.y,1));
+                }
+                state.objectives.Insert(0,Objective("altar","altar","中央圣坛",0,0,2));
+            }else if(mapId=="bog"){
+                state.terrain.Add(new TerrainState{id="marsh-river",kind="wetland",shape="river",halfWidth=690,halfHeight=92,radius=112});
+                state.terrain.Add(Shaped("north-forest","forest","ellipse",-165,320,410,250,16));
+                state.terrain.Add(Shaped("south-forest","forest","ellipse",165,-320,410,250,16));
+                state.terrain.Add(Shaped("west-grove","forest","ellipse",-530,-160,190,280,-18));
+                state.terrain.Add(Shaped("east-grove","forest","ellipse",530,160,190,280,-18));
+                state.terrain.Add(Rect("mine-rise-west","highland",-375,205,190,160,.52f));
+                state.terrain.Add(Rect("mine-rise-east","highland",375,-205,190,160,.52f));
+                state.terrain.Add(Rect("river-crossing","bridge",0,0,135,245,.22f));
+                state.terrain.Add(Rect("west-ruins","ruins",-165,-175,104,74,.55f));
+                state.terrain.Add(Rect("east-ruins","ruins",165,175,104,74,.55f));
+                state.objectives.Add(Objective("ore-west","mine","沉岸矿脉",-375,205,2));
+                state.objectives.Add(Objective("ore-east","mine","苔岩矿脉",375,-205,2));
+                state.objectives.Add(Objective("watchtower","tower","岔口瞭望塔",0,0,1));
+            }else{
+                state.terrain.Add(new TerrainState{id="frozen-river",kind="water",shape="river",halfWidth=690,halfHeight=58,radius=106});
+                state.terrain.Add(Rect("river-bridge","bridge",0,0,146,205,.24f));
+                for(int sign=-1;sign<=1;sign+=2){
+                    float x=sign*495,y=(float)Math.Sin(x/690*Math.PI)*106;
+                    state.terrain.Add(Rect("side-bridge-"+sign,"bridge",x,y,100,190,.2f));
+                }
+                state.terrain.Add(Rect("north-rise","highland",295,310,230,190,1.15f));
+                state.terrain.Add(Rect("south-rise","highland",-295,-310,230,190,1.15f));
+                state.terrain.Add(Shaped("snow-forest-west","forest","ellipse",-340,255,390,285,-20));
+                state.terrain.Add(Shaped("snow-forest-east","forest","ellipse",340,-255,390,285,-20));
+                state.terrain.Add(Shaped("snow-grove-west","forest","ellipse",-520,-155,190,220,14));
+                state.terrain.Add(Shaped("snow-grove-east","forest","ellipse",520,155,190,220,14));
+                state.objectives.Add(Objective("beacon","beacon","中央信标",0,0,2));
+                state.objectives.Add(Objective("supply-west","supply","林隘补给",-485,-245,1));
+                state.objectives.Add(Objective("supply-east","supply","霜岸补给",485,245,1));
+            }
+            return state;
+        }
+        static TerrainState Shaped(string id,string kind,string shape,float x,float y,float width,float depth,float rotation)
+        {var terrain=Rect(id,kind,x,y,width,depth);terrain.shape=shape;terrain.rotation=rotation;return terrain;}
+        public static Point2 TerrainPoint(TerrainState terrain,float localX,float localY)
+        {
+            double a=terrain.rotation*Math.PI/180;
+            return new Point2(terrain.x+localX*(float)Math.Cos(a)-localY*(float)Math.Sin(a),terrain.y+localX*(float)Math.Sin(a)+localY*(float)Math.Cos(a));
+        }
+        public static float RiverCentre(TerrainState terrain,float along)
+        {return terrain.halfWidth>0?(float)Math.Sin(along/terrain.halfWidth*Math.PI)*terrain.radius:0;}
+        public static float RiverWidth(TerrainState terrain,float along)
+        {return terrain.halfHeight*(.94f+.06f*(float)Math.Cos(along/Math.Max(1,terrain.halfWidth)*Math.PI*2));}
+        public static float Scale(BattlefieldState state){return state!=null&&state.scale>0?state.scale:1;}
+        public static float Extent(BattlefieldState state){return state!=null&&state.halfExtent>0?state.halfExtent:410;}
         public static bool Contains(TerrainState terrain,float x,float y)
         {
             if(terrain==null)return false;
             float dx=x-terrain.x,dy=y-terrain.y;
+            if(terrain.rotation!=0){double angle=-terrain.rotation*Math.PI/180;float rx=dx*(float)Math.Cos(angle)-dy*(float)Math.Sin(angle);dy=dx*(float)Math.Sin(angle)+dy*(float)Math.Cos(angle);dx=rx;}
+            if(terrain.shape=="river")return Math.Abs(dx)<=terrain.halfWidth&&Math.Abs(dy-RiverCentre(terrain,dx))<=RiverWidth(terrain,dx);
+            if(terrain.shape=="ellipse")return terrain.halfWidth>0&&terrain.halfHeight>0&&dx*dx/(terrain.halfWidth*terrain.halfWidth)+dy*dy/(terrain.halfHeight*terrain.halfHeight)<=1;
             if(terrain.kind=="chasm"){
                 float d=(float)Math.Sqrt(dx*dx+dy*dy);
-                return d>terrain.halfWidth&&d<terrain.radius&&Math.Abs(dx)>32&&Math.Abs(dy)>32;
+                float passage=terrain.halfHeight>0?terrain.halfHeight:32;
+                return d>terrain.halfWidth&&d<terrain.radius&&Math.Abs(dx)>passage&&Math.Abs(dy)>passage;
             }
             return terrain.radius>0?dx*dx+dy*dy<=terrain.radius*terrain.radius:
                 Math.Abs(dx)<=terrain.halfWidth&&Math.Abs(dy)<=terrain.halfHeight;
@@ -124,7 +195,8 @@ namespace BlockArena.Core
                 }
                 return true;
             }
-            if(Math.Abs(x)>410||Math.Abs(y)>410)return false;
+            float extent=Extent(state);
+            if(Math.Abs(x)>extent||Math.Abs(y)>extent)return false;
             if(state==null||flying)return true;
             bool platform=false;
             foreach(var t in state.terrain)if((t.kind=="highland"||t.kind=="bridge")&&Contains(t,x,y)){platform=true;break;}

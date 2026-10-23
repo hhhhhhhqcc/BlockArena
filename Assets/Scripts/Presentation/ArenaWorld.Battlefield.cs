@@ -15,8 +15,14 @@ namespace BlockArena.Presentation
         {
             public string id,kind;
             public TerrainState state;
-            public Transform root,water,ice,standing,rubble,fire;
+            public Transform root,water,ice,iceCrystals,standing,rubble,fire;
             public MeshRenderer waterRenderer,iceRenderer,fireRenderer;
+            public Mesh iceMesh;
+            public Vector3[] iceVertices;
+            public Color[] iceColors;
+            public readonly List<int> iceTriangles=new List<int>(5600);
+            public float iceFraction=-1;
+            public string iceCycle;
             public float x,y;
         }
         sealed class FieldObjectiveView
@@ -29,9 +35,13 @@ namespace BlockArena.Presentation
         }
         sealed class FieldMapView
         {
-            public string id;
-            public Transform root,floor,revealRing;
+            public string id,geometryKey;
+            public float scale=1;
+            public Transform root,floor,revealRing,environment;
             public MeshRenderer revealRenderer;
+            public Mesh floorMesh,revealFloorMesh;
+            public Vector3[] floorVertices,revealFloorVertices;
+            public float floorSpread=-1;
             public readonly List<FieldTerrainView> terrain=new List<FieldTerrainView>();
             public readonly List<FieldObjectiveView> objectives=new List<FieldObjectiveView>();
         }
@@ -113,8 +123,9 @@ namespace BlockArena.Presentation
             fieldRevealAge=fieldState.revealAge;fieldStageAge=next.revealStageAge;fieldRevealStage=next.revealStage;fieldSnapshotTime=Time.unscaledTime;
             fieldRevealProgress=FieldRevealProgress(0);
             FieldMapView map;
-            if(!fieldMaps.TryGetValue(fieldState.mapId,out map)){
-                map=BuildFieldMap(fieldState);fieldMaps.Add(fieldState.mapId,map);
+            string mapKey=fieldState.mapId+":"+fieldState.scale.ToString("0.###",System.Globalization.CultureInfo.InvariantCulture);
+            if(!fieldMaps.TryGetValue(mapKey,out map)){
+                map=BuildFieldMap(fieldState);fieldMaps.Add(mapKey,map);
             }
             if(fieldMap!=map){
                 if(fieldMap!=null)fieldMap.root.gameObject.SetActive(false);
@@ -131,7 +142,9 @@ namespace BlockArena.Presentation
                 FieldObjectiveView view=map.objectives[i];view.state=null;
                 for(int j=0;j<fieldState.objectives.Count;j++)if(fieldState.objectives[j].id==view.id){view.state=fieldState.objectives[j];break;}
             }
+            ApplyFieldEmergence();
             if(fieldWeatherId!=fieldState.weather){fieldWeatherId=fieldState.weather;fieldWeather.Clear();fieldWeatherEmission=0;}
+            SyncFieldIceCycle(next.round);
             string revealKey=FieldRevealKey();bool armed=fieldRevealArmedKey==viewerId+":"+next.round;
             if(armed&&next.phase=="reveal"&&fieldRevealStage=="terrain"&&fieldStageAge<.6f&&fieldRiseSoundKey!=revealKey){
                 fieldRiseSoundKey=revealKey;
@@ -156,10 +169,11 @@ namespace BlockArena.Presentation
         {if(SoundCue!=null){SoundCue(cue,Vector3.zero,intensity);fieldRevealSoundCount++;}}
 
         float BattlefieldVisualHeight(float x,float y)
-        {return fieldVisible&&fieldState!=null?BattlefieldCatalog.HeightAt(fieldState,x,y)*fieldRevealProgress:0;}
+        {return fieldVisible&&fieldState!=null?Mathf.Max(0,BattlefieldCatalog.HeightAt(fieldState,x,y)+FieldGroundOffset):0;}
 
         void ResetBattlefieldPresentation()
         {
+            ResetFieldEnvironment();
             if(!fieldVisible)return;
             fieldVisible=false;fieldState=null;fieldPhase=fieldRevealStage=null;fieldRevealProgress=1;fieldMarkerCount=0;fieldSettleAt=-10;
             if(fieldRoot!=null)fieldRoot.gameObject.SetActive(false);
@@ -169,7 +183,7 @@ namespace BlockArena.Presentation
 
         // Called by the existing ArenaWorld OnDestroy, alongside combat material cleanup.
         void DisposeBattlefieldPresentation()
-        {RestoreFieldLighting();if(fieldMaterial!=null)Destroy(fieldMaterial);}
+        {RestoreFieldLighting();foreach(var map in fieldMaps.Values){if(map.revealFloorMesh!=null)Destroy(map.revealFloorMesh);foreach(var terrain in map.terrain)if(terrain.iceMesh!=null)Destroy(terrain.iceMesh);}if(fieldMaterial!=null)Destroy(fieldMaterial);}
 
         Transform FieldPart(string name,Transform parent,Mesh mesh,Vector3 at,bool transparent=false)
         {
@@ -185,36 +199,26 @@ namespace BlockArena.Presentation
 
         FieldMapView BuildFieldMap(BattlefieldState source)
         {
-            FieldMapView map=new FieldMapView{id=source.mapId,root=NewRoot("Map "+source.mapId,fieldRoot)};
+            FieldMapView map=new FieldMapView{id=source.mapId,scale=Mathf.Max(1,source.scale),root=NewRoot("Map "+source.mapId,fieldRoot)};
+            map.geometryKey=map.id+"-"+map.scale.ToString("0.###",System.Globalization.CultureInfo.InvariantCulture);
             bool frost=source.mapId=="frost",bog=source.mapId=="bog";
             Color floor=FieldColor(frost?"#90A7A4":bog?"#63715A":"#8A9073");
-            map.floor=FieldMesh("Distinct battlefield floor",map.root,source.mapId+"-floor",b=>{
-                b.Disc(23.65f,.028f,.055f,8,floor,floor*.7f);
-                System.Random random=new System.Random(418+source.mapId.Length);
-                for(int i=0;i<150;i++){
-                    float x=(float)random.NextDouble()*41-20.5f,z=(float)random.NextDouble()*41-20.5f;
-                    if(Mathf.Abs(x)+Mathf.Abs(z)>31)continue;
-                    float w=.18f+(float)random.NextDouble()*.65f;
-                    b.Box(new Vector3(x,.064f,z),new Vector3(w,.014f,w*.6f),Color.Lerp(floor,Color.white,(float)random.NextDouble()*.14f));
-                }
-                for(int i=0;i<32;i++){
-                    float a=(i+.5f)*Mathf.PI/16;Vector3 p=new Vector3(Mathf.Cos(a)*22.6f,.085f,Mathf.Sin(a)*22.6f);
-                    b.Box(p,new Vector3(.1f,.04f,.65f),FieldColor(frost?"#CDE9E5":bog?"#ADB989":"#D4C79E"),Quaternion.Euler(0,-a*Mathf.Rad2Deg,0));
-                }
-            },Vector3.zero);
+            map.floor=BuildLandscapeFloor(map,source);
             map.revealRing=FieldMesh("Expanding map emergence front",map.root,"map-reveal-ring",b=>b.Ring(1,.98f,Color.white),new Vector3(0,.12f,0),true);
             map.revealRenderer=map.revealRing.GetComponent<MeshRenderer>();
-            for(int i=0;i<source.terrain.Count;i++)map.terrain.Add(BuildFieldTerrain(map,source.terrain[i]));
+            for(int i=0;i<source.terrain.Count;i++)map.terrain.Add(BuildFieldTerrain(map,source,source.terrain[i]));
             for(int i=0;i<source.objectives.Count;i++)map.objectives.Add(BuildFieldObjective(map,source.objectives[i]));
+            BuildFieldEnvironment(map,source);
             map.root.gameObject.SetActive(false);return map;
         }
 
-        FieldTerrainView BuildFieldTerrain(FieldMapView map,TerrainState t)
+        FieldTerrainView BuildFieldTerrain(FieldMapView map,BattlefieldState source,TerrainState t)
         {
             FieldTerrainView v=new FieldTerrainView{id=t.id,kind=t.kind,state=t,x=t.x,y=t.y};
             v.root=NewRoot(t.kind+" "+t.id,map.root);v.root.localPosition=FieldAt(t.x,t.y);
-            string key=map.id+"-"+t.id;bool frost=map.id=="frost";
+            string key=map.geometryKey+"-"+t.id;bool frost=map.id=="frost";
             float width=t.halfWidth*WorldScale*2,depth=t.halfHeight*WorldScale*2;
+            if(BuildNaturalFieldTerrain(map,source,t,v,key))return v;
             if(t.kind=="highland"||t.kind=="bridge"){
                 FieldPart("Walkable ramp and stone layers",v.root,FieldSlopeMesh(key,t,frost),Vector3.zero);
                 if(t.kind=="bridge"){
@@ -225,7 +229,7 @@ namespace BlockArena.Presentation
                             b.Box(p,new Vector3(.17f,.38f,.17f),FieldColor(frost?"#BACFD0":"#A9A58C"));
                         }
                     },Vector3.zero);
-                }else{
+                }else if(map.id=="courtyards"){
                     FieldMesh("Plateau inlaid corners",v.root,key+"-inlay",b=>{
                         float w=Mathf.Max(.2f,width*.5f-1.15f),d=Mathf.Max(.2f,depth*.5f-1.15f);
                         for(int sx=-1;sx<=1;sx+=2)for(int sz=-1;sz<=1;sz+=2){
@@ -247,13 +251,7 @@ namespace BlockArena.Presentation
                     b.Box(Vector3.zero,new Vector3(width,.02f,depth),Color.white);
                     for(int n=0;n<12;n++)b.Box(new Vector3((n/11f-.5f)*width*.85f,.015f,((n*7)%11/10f-.5f)*depth*.8f),new Vector3(.65f,.012f,.06f),FieldColor("#D5F9ED"));
                 },new Vector3(0,.11f,0),true);v.waterRenderer=v.water.GetComponent<MeshRenderer>();
-                v.ice=FieldMesh("Growing ice route",v.root,key+"-ice",b=>{
-                    b.Box(Vector3.zero,new Vector3(width,.035f,depth),FieldColor("#B4E0E9"));
-                    for(int n=0;n<14;n++){
-                        Vector3 p=new Vector3((n/13f-.5f)*width*.92f,.025f,((n*3)%13/12f-.5f)*depth*.85f);
-                        b.Box(p,new Vector3(.6f,.02f,.035f),FieldColor("#F1FBFF"),Quaternion.Euler(0,n*47,0));
-                    }
-                },new Vector3(0,.14f,0),true);v.iceRenderer=v.ice.GetComponent<MeshRenderer>();v.ice.gameObject.SetActive(false);
+                BuildFieldIce(v,t,"Growing ice route");
                 if(t.kind=="wetland")FieldMesh("Reed margins",v.root,key+"-reeds",b=>{
                     for(int n=0;n<24;n++){
                         float x=(n/23f-.5f)*width*.9f,z=(n%2==0?-1:1)*depth*.45f,h=.28f+(n%4)*.09f;
@@ -302,13 +300,7 @@ namespace BlockArena.Presentation
                     }
                 },Vector3.zero);
             }else if(t.kind=="chasm"){
-                FieldMesh("Dark moat with four real bridge openings",v.root,key+"-chasm",b=>{
-                    float step=10;for(float x=-t.radius;x<t.radius;x+=step)for(float y=-t.radius;y<t.radius;y+=step){
-                        float cx=x+step*.5f,cy=y+step*.5f;
-                        if(!BattlefieldCatalog.Contains(t,t.x+cx,t.y+cy))continue;
-                        b.Box(FieldAt(cx,cy,.085f),new Vector3(step*WorldScale,.06f,step*WorldScale),FieldColor(((int)x+(int)y)%30==0?"#26373D":"#1D2D31"));
-                    }
-                },Vector3.zero);
+                FieldPart("Continuous moat with four real bridge openings",v.root,FieldChasmSurface(key+"-chasm",t),Vector3.zero);
                 FieldMesh("Moat cut stone lips",v.root,key+"-lips",b=>{
                     for(int n=0;n<64;n++){
                         float a=(n+.5f)*Mathf.PI/32;
@@ -334,7 +326,7 @@ namespace BlockArena.Presentation
         {
             Mesh mesh;if(fieldMeshes.TryGetValue(key,out mesh))return mesh;
             var vertices=new List<Vector3>();var colors=new List<Color>();var triangles=new List<int>();
-            Color stone=FieldColor(frost?"#A1B9BA":t.kind=="bridge"?"#999D84":"#A6AA91");
+            Color stone=FieldColor(frost?"#ADC4BE":t.id.StartsWith("mine-rise")?"#86916C":t.kind=="bridge"?"#999D84":"#A6AA91");
             float ramp=Mathf.Min(25,t.halfWidth,t.halfHeight),rise=t.height*ramp/25;
             Vector2[] outer={new Vector2(-t.halfWidth,-t.halfHeight),new Vector2(t.halfWidth,-t.halfHeight),new Vector2(t.halfWidth,t.halfHeight),new Vector2(-t.halfWidth,t.halfHeight)};
             Vector2[] inner={new Vector2(-t.halfWidth+ramp,-t.halfHeight+ramp),new Vector2(t.halfWidth-ramp,-t.halfHeight+ramp),new Vector2(t.halfWidth-ramp,t.halfHeight-ramp),new Vector2(-t.halfWidth+ramp,t.halfHeight-ramp)};
@@ -346,7 +338,7 @@ namespace BlockArena.Presentation
                     Vector2 a=Vector2.Lerp(outer[side],inner[side],v),b=Vector2.Lerp(outer[next],inner[next],v),at=Vector2.Lerp(a,b,u);
                     // Match WorldSurfacePoint's 0.06 base exactly; it is also the
                     // surface used by clicking, creature feet and route projection.
-                    vertices.Add(FieldAt(at.x,at.y,.06f+rise*v));colors.Add(stone*(.94f+((x+z*3+side)%5)*.025f));
+                    vertices.Add(FieldAt(at.x,at.y,.06f+rise*v));colors.Add(stone*Mathf.Lerp(.84f,1.04f,v)*(.97f+Mathf.Sin(at.x*.02f+at.y*.01f)*.03f));
                     if(x<nx&&z<nz){int index=offset+z*(nx+1)+x;triangles.Add(index);triangles.Add(index+nx+1);triangles.Add(index+1);triangles.Add(index+1);triangles.Add(index+nx+1);triangles.Add(index+nx+2);}
                 }
             }
@@ -355,7 +347,7 @@ namespace BlockArena.Presentation
                 int nx=Mathf.Max(1,Mathf.CeilToInt(innerWidth*2/12.5f)),nz=Mathf.Max(1,Mathf.CeilToInt(innerDepth*2/12.5f)),offset=vertices.Count;
                 for(int z=0;z<=nz;z++)for(int x=0;x<=nx;x++){
                     vertices.Add(FieldAt(Mathf.Lerp(-innerWidth,innerWidth,x/(float)nx),Mathf.Lerp(-innerDepth,innerDepth,z/(float)nz),.06f+rise));
-                    colors.Add(stone*(.94f+((x+z*3)%5)*.025f));
+                    colors.Add(stone*(1+.035f*Mathf.Sin(x*.15f+z*.21f)));
                     if(x<nx&&z<nz){int index=offset+z*(nx+1)+x;triangles.Add(index);triangles.Add(index+nx+1);triangles.Add(index+1);triangles.Add(index+1);triangles.Add(index+nx+1);triangles.Add(index+nx+2);}
                 }
             }
@@ -366,7 +358,7 @@ namespace BlockArena.Presentation
         {
             FieldObjectiveView v=new FieldObjectiveView{id=objective.id,state=objective,x=objective.x,y=objective.y};
             v.root=NewRoot(objective.name,map.root);v.root.localPosition=FieldAt(objective.x,objective.y,.1f);
-            string key=map.id+"-objective-"+objective.id;
+            string key=map.geometryKey+"-objective-"+objective.id;
             FieldMesh("Objective plinth",v.root,key+"-base",b=>{
                 b.Disc(.85f,0,.14f,8,FieldColor("#87968A"),FieldColor("#56685E"));
                 b.Disc(.63f,.14f,.23f,8,FieldColor("#B9C7AA"),FieldColor("#819481"));
@@ -447,21 +439,12 @@ namespace BlockArena.Presentation
             dt=Mathf.Clamp(dt,0,.08f);
             fieldRevealProgress=FieldRevealProgress(Time.unscaledTime-fieldSnapshotTime);
             string revealKey=FieldRevealKey();
-            if(fieldPhase=="reveal"&&fieldRevealProgress>.995f&&fieldRiseSoundKey==revealKey&&fieldSettleSoundKey!=revealKey){
+            if(fieldPhase=="reveal"&&FieldEmergenceAge>=ArenaGame.RevealTerrainSeconds-.001f&&fieldRiseSoundKey==revealKey&&fieldSettleSoundKey!=revealKey){
                 fieldSettleSoundKey=revealKey;fieldSettleAt=time;PlayFieldRevealSound("map_lock",.7f);
             }
-            float rise=Mathf.Max(.002f,fieldRevealProgress);
-            float spread=Mathf.Lerp(.16f,1,rise);
-            fieldMap.floor.localScale=new Vector3(spread,1,spread);
-            fieldMap.revealRing.gameObject.SetActive(rise<.999f);
-            if(rise<.999f){
-                fieldMap.revealRing.localScale=new Vector3(23.65f*spread,1,23.65f*spread);
-                Color rune=FieldColor(fieldMap.id=="frost"?"#B6ECF5":fieldMap.id=="bog"?"#A7D394":"#EBD19A");
-                rune.a=Mathf.Sin(rise*Mathf.PI)*.75f;TintField(fieldMap.revealRenderer,rune);
-            }
+            ApplyFieldEmergence();
             for(int i=0;i<fieldMap.terrain.Count;i++){
                 FieldTerrainView v=fieldMap.terrain[i];TerrainState t=v.state;if(t==null)continue;
-                v.root.localScale=new Vector3(1,rise,1);
                 if(v.standing!=null){
                     float hp=t.maxHp>0?Mathf.Clamp01(t.hp/t.maxHp):1;
                     v.standing.gameObject.SetActive(hp>0);v.standing.localScale=new Vector3(1,.38f+.62f*hp,1);
@@ -469,11 +452,7 @@ namespace BlockArena.Presentation
                     v.rubble.localScale=new Vector3(1.1f-hp*.25f,1,1.1f-hp*.25f);
                 }
                 if(v.water!=null){
-                    bool dry=fieldWeatherId=="heat"&&t.kind=="wetland";v.water.gameObject.SetActive(!dry);
-                    Color c=FieldColor(t.kind=="water"?"#6CA6C0":"#64998B");c.a=.68f*(1-t.freeze*.8f);TintField(v.waterRenderer,c);
-                    v.water.localPosition=new Vector3(0,.105f+Mathf.Sin(time*.9f+i)*.006f,0);
-                    float ice=Mathf.Clamp01(t.freeze);v.ice.gameObject.SetActive(ice>.01f);
-                    if(ice>.01f){v.ice.localScale=new Vector3(Mathf.Lerp(.08f,1,ice),1,Mathf.Lerp(.1f,1,ice));TintField(v.iceRenderer,new Color(1,1,1,Mathf.Lerp(.25f,.93f,ice)));}
+                    UpdateFieldIce(v,t,time,i);
                 }
                 if(v.fire!=null){
                     bool burning=t.kind=="lava"||t.burnTime>0;v.fire.gameObject.SetActive(burning);
@@ -482,8 +461,6 @@ namespace BlockArena.Presentation
             }
             for(int i=0;i<fieldMap.objectives.Count;i++){
                 FieldObjectiveView v=fieldMap.objectives[i];ObjectiveState o=v.state;if(o==null)continue;
-                float baseHeight=BattlefieldVisualHeight(v.x,v.y)+.11f;v.root.localPosition=FieldAt(v.x,v.y,baseHeight);
-                v.root.localScale=Vector3.one*Mathf.Max(.01f,Mathf.SmoothStep(0,1,Mathf.Clamp01((rise-.18f)/.82f)));
                 Color owner=o.slot>=0&&o.slot<4?Teams[o.slot]:FieldColor("#F1DBA1");
                 TintField(v.ringRenderer,new Color(owner.r,owner.g,owner.b,.65f));TintField(v.iconRenderer,new Color(owner.r,owner.g,owner.b,.9f));
                 float capture=Mathf.Clamp01(o.capture);v.progress.gameObject.SetActive(capture>.005f&&!o.claimed);
@@ -495,7 +472,7 @@ namespace BlockArena.Presentation
                 v.icon.gameObject.SetActive(!o.claimed);
             }
             for(int i=0;i<fieldMarkerCount;i++)UpdateFieldMarker(fieldMarkers[i],time,i);
-            UpdateFieldLighting(dt);UpdateFieldWeather(dt,time);
+            UpdateFieldLighting(dt);UpdateFieldWeather(dt,time);UpdateFieldEnvironment(dt,time,FieldEnvironmentRise);
         }
 
         void UpdateFieldMarker(FieldMarker m,float time,int index)
@@ -548,6 +525,7 @@ namespace BlockArena.Presentation
                 case "heat":fog=FieldColor("#9D805F");sky=FieldColor("#E0C49A");sun=FieldColor("#FFD79A");intensity=1.2f;start=52;end=116;break;
                 case "sandstorm":fog=FieldColor("#AD9876");sky=FieldColor("#D4C2A0");sun=FieldColor("#E4CA9D");intensity=.82f;start=29;end=87;break;
             }
+            float distanceScale=Mathf.Lerp(1,1.8f,Mathf.Clamp01(ExpansionScale-1));start*=distanceScale;end*=distanceScale;
             float blend=1-Mathf.Exp(-dt*2.5f);
             RenderSettings.ambientSkyColor=Color.Lerp(RenderSettings.ambientSkyColor,sky,blend);RenderSettings.ambientEquatorColor=Color.Lerp(RenderSettings.ambientEquatorColor,equator,blend);
             RenderSettings.fogColor=Color.Lerp(RenderSettings.fogColor,fog,blend);RenderSettings.fogStartDistance=Mathf.Lerp(RenderSettings.fogStartDistance,start,blend);RenderSettings.fogEndDistance=Mathf.Lerp(RenderSettings.fogEndDistance,end,blend);
@@ -559,12 +537,13 @@ namespace BlockArena.Presentation
         {
             if(fieldWeather==null||fieldWeatherId=="clear")return;
             bool rain=fieldWeatherId=="rain"||fieldWeatherId=="storm",snow=fieldWeatherId=="snow",fog=fieldWeatherId=="fog",sand=fieldWeatherId=="sandstorm";
-            float rate=rain?260:snow?90:fog?22:sand?75:26;
+            float radiusScale=fieldMap==null?1:fieldMap.scale;
+            float rate=(rain?360:snow?120:fog?26:sand?110:35)*Mathf.Min(2,radiusScale);
             fieldWeatherEmission+=dt*rate*fieldRevealProgress;
             int count=Mathf.Min(30,Mathf.FloorToInt(fieldWeatherEmission));fieldWeatherEmission-=count;
             count=Mathf.Min(count,FieldWeatherBudget-fieldWeather.particleCount);
             for(int i=0;i<count;i++){
-                float angle=UnityEngine.Random.value*Mathf.PI*2,radius=Mathf.Sqrt(UnityEngine.Random.value)*23;
+                float angle=UnityEngine.Random.value*Mathf.PI*2,radius=Mathf.Sqrt(UnityEngine.Random.value)*23*radiusScale;
                 Vector3 at=new Vector3(Mathf.Cos(angle)*radius,rain?12:snow?7:UnityEngine.Random.Range(.2f,.7f),Mathf.Sin(angle)*radius);
                 ParticleSystem.EmitParams p=new ParticleSystem.EmitParams();p.position=at;p.applyShapeToPosition=false;
                 if(rain){p.velocity=new Vector3(-1.5f,-19,-.8f);p.startLifetime=.7f;p.startSize3D=new Vector3(.022f,.62f,.022f);p.startColor=new Color(.65f,.83f,.91f,.43f);}

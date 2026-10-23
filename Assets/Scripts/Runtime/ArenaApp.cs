@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using BlockArena.Core;
@@ -24,10 +25,13 @@ namespace BlockArena.Runtime
         public bool ConnectionPending { get { return client != null && client.Connecting; } }
         public bool Hosting { get { return server != null; } }
         public bool HasSession { get { return client != null; } }
+        static readonly ChatMessage[] EmptyChat = new ChatMessage[0];
+        public IList<ChatMessage> ChatMessages { get { return client == null ? EmptyChat : client.ChatHistory; } }
+        public void SendChat(string text) { if (client != null) client.SendChat(text); }
         public string PlayerId { get { return client == null ? null : client.PlayerId; } }
         public string PlayerName = "冒险家", Address = "127.0.0.1", PortText = "7777";
         public string Status = "", SelectedId;
-        public bool ShowRoom, ShowHelp, ShowShop, ShowBestiary;
+        public bool ShowRoom, ShowShop, ShowBestiary;
         bool showGameMenu;
         public bool ShowGameMenu
         {
@@ -41,17 +45,20 @@ namespace BlockArena.Runtime
                 StopPlayerMovement(); CancelDragging();
                 if (open)
                 {
-                    ShowRoom = ShowHelp = ShowShop = ShowBestiary = false;
+                    ShowRoom = ShowShop = ShowBestiary = false;
                     if (hud != null) { hud.ShowAudio = false; hud.ShowOwnedSkills = false; hud.CloseSkillDetails(); hud.ClosePinnedInspection(); hud.ClearHover(); }
                     if (World != null) World.SetHovered(null);
                 }
             }
         }
-        internal bool BattlefieldInputBlocked { get { return QuickStarting || ShowGameMenu || ShowRoom || ShowHelp || ShowBestiary || hud != null && hud.ShowSettings; } }
+        internal bool BattlefieldInputBlocked { get { return communicationHandledFrame == Time.frameCount || QuickStarting || ShowGameMenu || ShowRoom || ShowBestiary || hud != null && (hud.ShowSettings || hud.CommunicationInputActive); } }
         public bool QuickStarting { get { return quickStart; } }
         public ArenaDisplaySettings Display { get; private set; }
+        public ArenaKeyBindings Keys { get; private set; }
         public ArenaWorld World { get; private set; }
         public ArenaAudio Sound { get; private set; }
+        public ArenaAmbience Ambience { get; private set; }
+        public ArenaVoice Voice { get; private set; }
         public ArenaTactics Tactics { get; private set; }
         public string LocalAddresses { get; private set; }
         public string Notice { get { return Time.unscaledTime < noticeUntil ? notice : ""; } }
@@ -88,6 +95,7 @@ namespace BlockArena.Runtime
         Point2 dragOffset, dragPoint;
         Point2? walkTarget;
         int lastErrorVersion;
+        int communicationHandledFrame = -1;
         float nextMove, noticeUntil;
         float outcomeSoundAt;
         string outcomeSound;
@@ -97,6 +105,8 @@ namespace BlockArena.Runtime
         internal Vector2? VerificationPointer;
         internal bool VerificationInput;
         internal GameState VerificationState;
+        internal void RecordCommunicationInput(bool handled)
+        { if (handled) communicationHandledFrame = Time.frameCount; }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         static void Bootstrap()
@@ -139,6 +149,7 @@ namespace BlockArena.Runtime
                 catch (Exception e) { Debug.LogError(e.Message); Application.Quit(1); }
                 return;
             }
+            Keys = new ArenaKeyBindings(() => !VerificationInput, !Array.Exists(args, argument => argument.EndsWith("-test", StringComparison.Ordinal)));
             Display = new ArenaDisplaySettings(() => VerificationInput);
             World = new GameObject("Arena World").AddComponent<ArenaWorld>();
             World.transform.SetParent(transform, false);
@@ -147,6 +158,15 @@ namespace BlockArena.Runtime
             Sound = ArenaAudio.Initialize();
             if (Sound != null) World.SoundCue = Sound.Play;
             hud = new ArenaHud(this);
+            Voice = gameObject.AddComponent<ArenaVoice>();
+            Voice.Initialize(() => client, () => State,
+                () => hud.CommunicationInputActive || ShowGameMenu || hud.ShowSettings || ShowBestiary,
+                () => VerificationInput);
+            var ambienceObject = new GameObject("Arena environmental audio");
+            ambienceObject.transform.SetParent(transform, false);
+            Ambience = ambienceObject.AddComponent<ArenaAmbience>();
+            Ambience.Initialize(this);
+            World.ThunderCue = Ambience.Thunder;
             hud.ShowCommanderRange = PlayerPrefs.GetInt("arena.commanderRange", 1) != 0;
             hud.CommanderRangeChanged = enabled =>
             {
@@ -283,6 +303,7 @@ namespace BlockArena.Runtime
 
         void StopNetwork()
         {
+            if (Voice != null) Voice.ResetSession();
             ResetMenuState();
             if (client != null) { client.Dispose(); client = null; }
             if (server != null) { server.Dispose(); server = null; }
@@ -299,10 +320,10 @@ namespace BlockArena.Runtime
         {
             showGameMenu = false;
             settingsInputSuspended = false;
-            ShowRoom = ShowHelp = ShowShop = ShowBestiary = false;
+            ShowRoom = ShowShop = ShowBestiary = false;
             walkTarget = null; wasMoving = false;
             if (Tactics != null) Tactics.SuspendInput();
-            if (hud != null) { hud.ShowAudio = false; hud.CloseSkillDetails(); hud.ShowOwnedSkills = false; hud.ClosePinnedInspection(); hud.ClearHover(); }
+            if (hud != null) { hud.ResetCommunication(); hud.ShowAudio = false; hud.CloseSkillDetails(); hud.ShowOwnedSkills = false; hud.ClosePinnedInspection(); hud.ClearHover(); }
         }
 
         void StopPlayerMovement()
@@ -318,9 +339,9 @@ namespace BlockArena.Runtime
         public void HandleEscape()
         {
             bool changed = true, sounded = false;
-            if (QuickStarting) Leave();
+            if (hud != null && hud.CancelKeyBinding()) { sounded = true; }
+            else if (QuickStarting) Leave();
             else if (Tactics != null && Tactics.Targeting) { Tactics.CancelTargeting(); sounded = true; }
-            else if (ShowHelp) ShowHelp = false;
             else if (ShowBestiary) ShowBestiary = false;
             else if (ShowRoom && State != null && (State.phase != "lobby" || ShowGameMenu || hud != null && hud.ShowSettings)) ShowRoom = false;
             else if (hud != null && hud.ShowAudio) hud.ShowAudio = false;
@@ -363,11 +384,18 @@ namespace BlockArena.Runtime
                 World.SetHovered(null); hud.ClearHover();
             }
             settingsInputSuspended = hud.ShowSettings;
-            if (!VerificationInput && Input.GetKeyDown(KeyCode.Escape))
+            bool communicationHandled = !VerificationInput && hud.HandleCommunicationKeys();
+            RecordCommunicationInput(communicationHandled);
+            if (communicationHandled)
+            {
+                StopPlayerMovement(); CancelDragging();
+                if (Tactics != null) Tactics.SuspendInput();
+            }
+            if (!VerificationInput && !communicationHandled && Input.GetKeyDown(KeyCode.Escape))
                 HandleEscape();
-            if (!VerificationInput && !BattlefieldInputBlocked && !hud.KeyboardCaptured && Input.GetKeyDown(KeyCode.M) && CanPrepare)
+            if (!VerificationInput && !BattlefieldInputBlocked && !hud.KeyboardCaptured && Keys.Down("shop") && CanPrepare)
             { ShowShop = !ShowShop; if (Sound != null) Sound.PlayUiClick(); }
-            if (!VerificationInput && !BattlefieldInputBlocked && !hud.KeyboardCaptured && Input.GetKeyDown(KeyCode.B))
+            if (!VerificationInput && !BattlefieldInputBlocked && !hud.KeyboardCaptured && Keys.Down("bestiary"))
             { ShowBestiary = !ShowBestiary; if (Sound != null) Sound.PlayUiClick(); }
             if (!VerificationInput && !BattlefieldInputBlocked && !hud.KeyboardCaptured && !hud.PointerCaptured && !hud.Contains(Input.mousePosition))
             {
@@ -375,7 +403,12 @@ namespace BlockArena.Runtime
                 if (Mathf.Abs(scroll) > .01f) World.Zoom(scroll, Input.mousePosition);
                 if (Input.GetMouseButton(2)) World.Pan(new Vector2(Input.GetAxisRaw("Mouse X"), Input.GetAxisRaw("Mouse Y")));
             }
-            if (!VerificationInput && !BattlefieldInputBlocked && !hud.KeyboardCaptured && Input.GetKeyDown(KeyCode.F)) World.ResetView();
+            if (!VerificationInput && !BattlefieldInputBlocked && !hud.KeyboardCaptured && Keys.Down("reset-view")) World.ResetView();
+            if (!VerificationInput && !BattlefieldInputBlocked && !hud.KeyboardCaptured)
+            {
+                if (Keys.Down("rotate-left")) World.RotateView(-1);
+                if (Keys.Down("rotate-right")) World.RotateView(1);
+            }
             if (client != null && client.ErrorVersion != lastErrorVersion)
             {
                 lastErrorVersion = client.ErrorVersion;
@@ -589,10 +622,14 @@ namespace BlockArena.Runtime
         {
             VoxelCreature visual; FighterState fighter;
             if (State == null || !Connected || BattlefieldInputBlocked || dragId != null || hud.PointerCaptured ||
-                (State.phase != "prep" && State.phase != "recruit" && State.phase != "battle" && State.phase != "tactics") || hud.Contains(mouse) ||
-                !World.TryInspectCreature(mouse, out visual, out fighter))
+                (State.phase != "prep" && State.phase != "recruit" && State.phase != "battle" && State.phase != "tactics") || hud.Contains(mouse))
             {
                 World.SetHovered(null); hud.ClearHover(); return;
+            }
+            if(!World.TryInspectCreature(mouse,out visual,out fighter)){
+                World.SetHovered(null);ObjectiveState objective;
+                if(World.TryInspectObjective(mouse,out objective))hud.SetObjectiveInspection(objective,mouse);else hud.ClearHover();
+                return;
             }
             World.SetHovered(visual);
             CreatureDefinition definition = CreatureCatalog.Get(visual.Kind);
@@ -622,8 +659,8 @@ namespace BlockArena.Runtime
 
         Point2 ClampPlacement(Point2 point)
         {
-            Point2 local = ArenaGame.WorldToLocal(Me.slot, point.x, point.y);
-            return ArenaGame.LocalToWorld(Me.slot, Mathf.Clamp(local.x, -185, 185), Mathf.Clamp(local.y, 175, 355));
+            Point2 local = ArenaGame.WorldToFormation(Me, point.x, point.y);
+            return ArenaGame.FormationToWorld(Me, Mathf.Clamp(local.x, -185, 185), Mathf.Clamp(local.y, 175, 355));
         }
 
         void HandleMovement()
@@ -631,8 +668,8 @@ namespace BlockArena.Runtime
             if (Time.unscaledTime < nextMove) return;
             nextMove = Time.unscaledTime + .1f;
             Vector2 input = new Vector2(
-                (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow) ? 1 : 0) - (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow) ? 1 : 0),
-                (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow) ? 1 : 0) - (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow) ? 1 : 0));
+                (Keys.Held("right") ? 1 : 0) - (Keys.Held("left") ? 1 : 0),
+                (Keys.Held("forward") ? 1 : 0) - (Keys.Held("backward") ? 1 : 0));
             if (input.sqrMagnitude > 0) walkTarget = null;
             Vector2 direction = World.LocalMovementToWorld(input);
             bool moving = direction.sqrMagnitude > .001f;

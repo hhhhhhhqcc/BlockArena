@@ -11,7 +11,7 @@ namespace BlockArena.Runtime
         internal Rect LastHoverScreenRect {
             get {
                 Metrics();
-                if(Time.unscaledTime>hoverUntil||AudioBlocksUnderlying||app.State==null||app.ShowGameMenu||app.ShowHelp||app.ShowBestiary)return Rect.zero;
+                if(Time.unscaledTime>hoverUntil||AudioBlocksUnderlying||app.State==null||app.ShowGameMenu||app.ShowBestiary)return Rect.zero;
                 if(inspectionDefinition!=null)return inspectionTooltip;
                 return hoverTooltipRect.width>0?ToScreenRect(hoverTooltipRect):Rect.zero;
             }
@@ -25,7 +25,7 @@ namespace BlockArena.Runtime
         internal Rect CommandDockScreenRect { get { Metrics();return CommandDockVisible?ToScreenRect(CommandDockRect):Rect.zero; } }
         internal Rect SessionSummaryScreenRect { get { Metrics();return ToScreenRect(HeaderRect); } }
         internal Rect ToolbarScreenRect { get { return Rect.zero; } }
-        internal Rect SecondaryActionScreenRect { get { Metrics();return ToScreenRect(OwnedSkillToggleRect); } }
+        internal Rect SecondaryActionScreenRect { get { Metrics();return OwnedSkillToggleVisible?ToScreenRect(OwnedSkillToggleRect):Rect.zero; } }
         internal Rect PrimaryActionScreenRect { get { Metrics();return ToScreenRect(app.State!=null&&app.State.phase=="tactics"?TacticsReadyRect:ReadyRect); } }
         internal bool UnderlayInputBlockedForVerification { get { return !LayerAcceptsPointer(); } }
 
@@ -37,15 +37,17 @@ namespace BlockArena.Runtime
             if(drawingAudio)return SettingsControlsAvailable;
             if(ShowSettings){
                 if(!drawingModal)return false;
-                int settingsFront=app.ShowHelp?6:app.ShowBestiary?5:app.State!=null&&app.ShowRoom?3:-1;
+                int settingsFront=app.ShowBestiary?5:app.State!=null&&app.ShowRoom?3:-1;
                 return modalLayer==settingsFront;
             }
+            if(!drawingCommunication&&CommunicationCovers(p))return false;
             if(audioPointerOwned||AudioCovers(p))return false;
             if(drawingModal){
-                int front=app.ShowHelp?6:app.ShowBestiary?5:app.State!=null&&app.ShowRoom?3:app.ShowGameMenu?7:app.State!=null&&app.State.phase=="lobby"?3:RecruitVisible?2:app.State!=null&&app.State.phase=="finished"?4:1;
+                int front=app.ShowBestiary?5:app.State!=null&&app.ShowRoom?3:app.ShowGameMenu?7:app.State!=null&&app.State.phase=="lobby"?3:RecruitVisible?2:app.State!=null&&app.State.phase=="finished"?4:1;
                 return modalLayer==front;
             }
             if(ModalOpen&&!(drawingCommander&&RecruitVisible&&!app.ShowGameMenu)&&!(drawingCommander&&app.State!=null&&app.State.phase=="lobby"&&!app.ShowGameMenu))return false;
+            if(!drawingArmy&&(inspectionPointerOwned||inspectionDragging||inspectionReleasedFrame==Time.frameCount))return false;
             if(drawingCommander)return true;
             if(CommanderOverlayCovers(p))return false;
             if(drawingArmy)return true;

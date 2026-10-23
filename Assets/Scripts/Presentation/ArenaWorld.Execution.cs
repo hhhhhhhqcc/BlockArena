@@ -49,11 +49,11 @@ namespace BlockArena.Presentation
         {
             if(slot<0||slot>=executionLocks.Length||executionLocks[slot]!=null)return;
             executionBeams[slot]=NewRoot("Crystal soul tether "+slot,ritualRoot);
-            VoxelAssets.Part(executionBeams[slot],"Continuous white-hot ray",VoxelAssets.Cached("execution/connected-ray",b=>{
-                b.Box(new Vector3(0,0,.5f),new Vector3(.075f,.075f,1),VoxelAssets.Hex("#FFF0DF"));
+            VoxelAssets.Part(executionBeams[slot],"Continuous white-hot ray",VoxelAssets.Cached("execution/connected-ray-grand",b=>{
+                b.Box(new Vector3(0,0,.5f),new Vector3(.11f,.11f,1),VoxelAssets.Hex("#FFF0DF"));
                 for(int side=0;side<4;side++){
                     Quaternion q=Quaternion.Euler(0,0,side*90);
-                    b.Box(q*new Vector3(.095f,0,.5f),new Vector3(.03f,.03f,1),VoxelAssets.Hex("#E69DEB"));
+                    b.Box(q*new Vector3(.14f,0,.5f),new Vector3(.04f,.04f,1),VoxelAssets.Hex("#E69DEB"));
                 }
             }),Vector3.zero,VoxelAssets.Glow,false);
             for(int i=0;i<6;i++)executionMotes[slot,i]=VoxelAssets.Part(executionBeams[slot],"Flowing tether spark "+i,
@@ -143,9 +143,9 @@ namespace BlockArena.Presentation
                     for(int m=0;m<6;m++){
                         float travel=Mathf.Repeat((ritualAge-impact.launchAt)*1.7f+m/6f,1),angle=travel*18+ritualAge*8;
                         Transform mote=executionMotes[slot,m];
-                        mote.localPosition=new Vector3(Mathf.Cos(angle)*.16f,Mathf.Sin(angle)*.16f,travel);
+                        mote.localPosition=new Vector3(Mathf.Cos(angle)*.21f,Mathf.Sin(angle)*.21f,travel);
                         mote.localRotation=Quaternion.Euler(0,0,angle*Mathf.Rad2Deg);
-                        mote.localScale=new Vector3(.1f,.1f,.1f/length);
+                        mote.localScale=new Vector3(.13f,.13f,.13f/length);
                     }
                 }
                 if(ritualAge>=lockStart&&after<.11f){
@@ -160,12 +160,12 @@ namespace BlockArena.Presentation
                     executionBurstCount++;Transform burst=executionBursts[slot];burst.gameObject.SetActive(true);burst.position=steve.Target;
                     Transform flash=executionFlashes[slot];flash.gameObject.SetActive(after<ExecutionShatterDelay);
                     float flashLife=Mathf.Clamp01(after/ExecutionShatterDelay);
-                    flash.localScale=Vector3.one*(.3f+Mathf.Sin(flashLife*Mathf.PI)*1.55f);
+                    flash.localScale=Vector3.one*(.3f+Mathf.Sin(flashLife*Mathf.PI)*1.85f);
                     flash.localRotation=Quaternion.Euler(after*210,after*180,45);
-                    float waveLife=Mathf.Clamp01(after/.52f),waveSize=.35f+Mathf.Sqrt(waveLife)*2.7f;
+                    float waveLife=Mathf.Clamp01(after/.52f),waveSize=.35f+Mathf.Sqrt(waveLife)*3.15f;
                     executionWaves[slot].localScale=new Vector3(waveSize,1,waveSize);
                     executionWaves[slot].localRotation=Quaternion.Euler(0,after*65,0);
-                    executionHalos[slot].localScale=Vector3.one*(.2f+waveLife*2.6f);
+                    executionHalos[slot].localScale=Vector3.one*(.2f+waveLife*3.05f);
                     executionHalos[slot].rotation=viewCamera.transform.rotation*Quaternion.Euler(-90,0,0);
                 }
                 if(impact.shattered&&after<ExecutionShatterDelay+.95f)UpdateExecutionFragments(slot,steve.Target,after-ExecutionShatterDelay);
@@ -197,9 +197,11 @@ namespace BlockArena.Presentation
             Quaternion rotation=Quaternion.LookRotation(cameraYaw*new Vector3(0,-31,-35),Vector3.up);
             Vector3 right=rotation*Vector3.right,up=rotation*Vector3.up;
             Vector2 minimum=new Vector2(float.MaxValue,float.MaxValue),maximum=new Vector2(float.MinValue,float.MinValue);
-            IncludeExecutionBounds(new Bounds(new Vector3(0,.12f,0),new Vector3(6,.3f,6)),right,up,ref minimum,ref maximum);
-            IncludeExecutionBounds(new Bounds(new Vector3(0,3.6f,0),new Vector3(3.4f,7.2f,3.4f)),right,up,ref minimum,ref maximum);
-            IncludeExecutionBounds(new Bounds(target.Target+Vector3.up*2.1f,new Vector3(6,4.8f,6)),right,up,ref minimum,ref maximum);
+            IncludeExecutionBounds(RitualPillarBounds,right,up,ref minimum,ref maximum);
+            IncludeExecutionBounds(RitualCrystalCameraEnvelope,right,up,ref minimum,ref maximum);
+            // Keep separate envelopes: one giant union would include empty tall corners and zoom out excessively.
+            IncludeExecutionBounds(new Bounds(new Vector3(0,.12f,0),new Vector3(14,.3f,14)),right,up,ref minimum,ref maximum);
+            IncludeExecutionBounds(new Bounds(target.Target+Vector3.up*2.1f,new Vector3(8,5.2f,8)),right,up,ref minimum,ref maximum);
             Vector2 center=(minimum+maximum)*.5f,span=maximum-minimum;
             float framedSize=Mathf.Max(size*.56f,Mathf.Max(span.y/(2*.78f),span.x/(2*aspect*.8f)));
             Vector3 framedFocus=(target.Target+Vector3.up*2.1f)*.5f;
@@ -226,7 +228,7 @@ namespace BlockArena.Presentation
             for(int i=0;i<32;i++){
                 int cell=i%8;float x=(cell&1)==0?-1:1,z=(cell&4)==0?-1:1,y=(cell&2)==0?-1:1;
                 Vector3 origin=i<8?new Vector3(x*.14f,1.59f+y*.14f,z*.14f):i<16?new Vector3(x*.14f,1.03f+y*.16f,z*.09f):i<24?new Vector3(x*.42f,1.03f+y*.19f,z*.09f):new Vector3(x*.16f,.34f+y*.17f,z*.09f);
-                float angle=i*2.39996f,speed=1.4f+(i%5)*.35f;
+                float angle=i*2.39996f,speed=(1.4f+(i%5)*.35f)*1.16f;
                 Vector3 velocity=new Vector3(Mathf.Cos(angle)*speed,1.5f+(i%4)*.32f,Mathf.Sin(angle)*speed);
                 Transform chunk=executionChunks[slot,i];
                 Vector3 position=origin+velocity*age+Vector3.down*(4.9f*age*age);position.y=Mathf.Max(.09f,position.y);

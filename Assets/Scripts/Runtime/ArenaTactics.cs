@@ -51,7 +51,7 @@ namespace BlockArena.Runtime
             if(app.State.phase=="battle")
             {
                 if(Input.GetKeyDown(KeyCode.Escape))Targeting=false;
-                if(Input.GetKeyDown(KeyCode.Q)){if(Targeting){if(!app.Hud.Contains(mouse))Cast(mouse);}else ArmSkill();return true;}
+                if(app.Keys.Down("cast")){if(Targeting){if(!app.Hud.Contains(mouse))Cast(mouse);}else ArmSkill();return true;}
                 if(Targeting&&Input.GetMouseButtonDown(1)){CancelTargeting();return true;}
                 if(Targeting&&Input.GetMouseButtonDown(0)&&!app.Hud.Contains(mouse)){Cast(mouse);return true;}
                 return Targeting;
@@ -231,7 +231,9 @@ namespace BlockArena.Runtime
         {
             if(!CanEdit||selection.Count==0)return;
             if(draft.Count>=MaxNodes){app.Notify("每条路线最多 10 个节点，可删除或调整已有节点。");return;}
-            var node=new TacticNode{x=Mathf.Clamp(point.x,-405,405),y=Mathf.Clamp(point.y,-405,405),seconds=5,threshold=100};
+            if(float.IsNaN(point.x)||float.IsInfinity(point.x)||float.IsNaN(point.y)||float.IsInfinity(point.y))return;
+            float edge=BattlefieldCatalog.Extent(app.State.battlefield);
+            var node=new TacticNode{x=Mathf.Clamp(point.x,-edge,edge),y=Mathf.Clamp(point.y,-edge,edge),seconds=5,threshold=100};
             ObjectiveState objective=NearestObjective(node.x,node.y,50);
             if(objective!=null){node.action="capture";node.targetId=objective.id;node.x=objective.x;node.y=objective.y;}
             draft.Add(node);SelectedNode=draft.Count-1;Dirty=true;RoutesMixed=false;if(feedback)RouteFeedback();
